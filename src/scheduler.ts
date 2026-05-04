@@ -1,0 +1,27 @@
+import "dotenv/config";
+import { runDeadlineWatch } from "./skills/deadline-watch";
+import { runConsumableTracker } from "./skills/consumable-tracker";
+import { runSubscriptionManager } from "./skills/sub-manager";
+import { runSpendingDashboard } from "./skills/spending-dashboard";
+import { scanGmail } from "./services/gmailScanner";
+import { startWorker } from "./queue/worker";
+import { log } from "./utils/logger";
+import cron from "node-cron";
+
+export function initScheduler(): void {
+  cron.schedule("0 8 * * *", runDeadlineWatch);
+  cron.schedule("5 8 * * *", runConsumableTracker);
+  cron.schedule("10 8 * * *", runSubscriptionManager);
+  cron.schedule("15 8 * * 1", runSpendingDashboard);
+  cron.schedule("20 8 * * *", scanGmail);
+
+  log("ReceiptVault scheduler initialized. All 5 jobs registered.");
+}
+
+// When run directly as `npm run scheduler`, register jobs and start the worker.
+// When imported by index.ts, only initScheduler() is called — index.ts owns the worker.
+if (require.main === module) {
+  startWorker();
+  initScheduler();
+  log("ReceiptVault scheduler running as standalone process.");
+}

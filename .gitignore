@@ -1,4 +1,6 @@
-node_modules
-dist
 .env
-src/memory/users
+node_modules/
+dist/
+credentials.json
+token.json
+.gmail-processed.json

@@ -1,97 +1,83 @@
-import { listConsumablePurchaseEvents } from "../../db/receipt-items.js";
-import { listUsers } from "../../db/users.js";
-import { readPatterns, readPrefs, writePatterns } from "../../memory/memory.js";
-import { sendViaPreferredChannel } from "../../services/channel-delivery.js";
+import { supabase } from "../../services/supabaseWriter";
+import { sendWhatsAppMessage } from "../../services/whatsappSender";
+import { getUserPrefs, saveUserPatterns } from "../../utils/memory";
+import { isWithinQuietHours, canSendAlert } from "../../utils/alertHelpers";
+import { log, logError } from "../../utils/logger";
 
-function isoDaysBetween(a: string, b: string): number {
-  const ms = new Date(b).getTime() - new Date(a).getTime();
-  return Math.max(1, Math.round(ms / (1000 * 60 * 60 * 24)));
-}
+export async function runConsumableTracker(): Promise<void> {
+  log("Running Consumable Tracker skill...");
 
-export function computeAverageReorderIntervals(events: { item_name: string; receipt_date: string }[]): Array<{
-  productName: string;
-  reorderIntervalDays: number;
-}> {
-  const grouped = new Map<string, string[]>();
-  for (const e of events) {
-    const dates = grouped.get(e.item_name) ?? [];
-    dates.push(e.receipt_date);
-    grouped.set(e.item_name, dates);
-  }
-
-  return Array.from(grouped.entries()).flatMap(([item, dates]) => {
-    const sorted = dates.sort();
-    if (sorted.length < 2) return [];
-    let total = 0;
-    let count = 0;
-    for (let i = 1; i < sorted.length; i += 1) {
-      total += isoDaysBetween(sorted[i - 1], sorted[i]);
-      count += 1;
-    }
-    return [{ productName: item, reorderIntervalDays: Math.round(total / count) }];
-  });
-}
-
-export async function refreshConsumablePatterns(): Promise<void> {
-  let users;
   try {
-    users = await listUsers();
-  } catch (error) {
-    console.error("[consumable-tracker] failed to list users:", (error as Error).message);
-    return;
-  }
-  for (const user of users) {
-    try {
-      const events = await listConsumablePurchaseEvents(user.id);
-      const reorderIntervals = computeAverageReorderIntervals(events);
+    const { data: rows, error } = await supabase
+      .from("receipt_items")
+      .select("name, receipts!inner(user_phone, purchase_date)")
+      .eq("is_consumable", true);
 
-      const existing = (await readPatterns(user.phone)) ?? {
-        reorderIntervals: [],
-        subscriptions: [],
-        spendingBaselines: []
-      };
-      await writePatterns(user.phone, { ...existing, reorderIntervals });
-    } catch (error) {
-      console.error(`[consumable-tracker] refresh failed for user ${user.id}:`, (error as Error).message);
+    if (error) {
+      logError("Consumable Tracker query failed", error);
+      return;
     }
-  }
-}
 
-export async function sendConsumableReorderNudges(): Promise<void> {
-  let users;
-  try {
-    users = await listUsers();
-  } catch (error) {
-    console.error("[consumable-tracker] failed to list users:", (error as Error).message);
-    return;
-  }
-  const now = new Date().toISOString().slice(0, 10);
+    if (!rows || rows.length === 0) {
+      log("Consumable Tracker: no consumable items found");
+      return;
+    }
 
-  for (const user of users) {
-    try {
-      const patterns = await readPatterns(user.phone);
-      if (!patterns) continue;
-      const prefs = await readPrefs(user.phone);
-      const events = await listConsumablePurchaseEvents(user.id);
+    const userItemMap: Record<string, Record<string, Date[]>> = {};
 
-      for (const interval of patterns.reorderIntervals) {
-        const matching = events
-          .filter((e) => e.item_name === interval.productName)
-          .map((e) => e.receipt_date)
-          .sort();
-        const lastDate = matching[matching.length - 1];
-        if (!lastDate) continue;
-        const daysSince = isoDaysBetween(lastDate, now);
-        if (daysSince >= interval.reorderIntervalDays) {
-          await sendViaPreferredChannel(
-            user,
-            prefs,
-            `You usually buy ${interval.productName} every ${interval.reorderIntervalDays} days - time to reorder?`
-          );
+    for (const row of rows) {
+      const receipt = row.receipts as any;
+      const userPhone: string = receipt.user_phone;
+      const purchaseDate = new Date(receipt.purchase_date);
+      const itemName: string = row.name.toLowerCase();
+
+      if (!userItemMap[userPhone]) userItemMap[userPhone] = {};
+      if (!userItemMap[userPhone][itemName]) userItemMap[userPhone][itemName] = [];
+      userItemMap[userPhone][itemName].push(purchaseDate);
+    }
+
+    const today = new Date();
+
+    for (const [userPhone, items] of Object.entries(userItemMap)) {
+      const reorderIntervals: { item_name: string; avg_days: number; last_purchased: string }[] = [];
+
+      for (const [itemName, dates] of Object.entries(items)) {
+        if (dates.length < 2) continue;
+
+        dates.sort((a, b) => a.getTime() - b.getTime());
+
+        const gaps: number[] = [];
+        for (let i = 1; i < dates.length; i++) {
+          gaps.push((dates[i].getTime() - dates[i - 1].getTime()) / 86400000);
+        }
+
+        const avgDays = Math.round(gaps.reduce((a, b) => a + b, 0) / gaps.length);
+        const lastPurchased = dates[dates.length - 1];
+        const predictedNext = new Date(lastPurchased.getTime() + avgDays * 86400000);
+
+        reorderIntervals.push({
+          item_name: itemName,
+          avg_days: avgDays,
+          last_purchased: lastPurchased.toISOString().split("T")[0],
+        });
+
+        const daysUntilReorder = Math.ceil((predictedNext.getTime() - today.getTime()) / 86400000);
+
+        if (daysUntilReorder <= 3 && daysUntilReorder >= 0) {
+          const prefs = await getUserPrefs(userPhone);
+          if (isWithinQuietHours(prefs)) continue;
+          if (!canSendAlert(userPhone, prefs.max_alerts_per_hour)) continue;
+
+          const searchUrl = `https://www.amazon.in/s?k=${encodeURIComponent(itemName)}`;
+          const message = `Running low on ${itemName}? Your usual reorder is due around ${predictedNext.toISOString().split("T")[0]}. Order here: ${searchUrl}`;
+          await sendWhatsAppMessage(userPhone, message);
+          log(`Reorder alert sent: ${itemName} → ${userPhone}`);
         }
       }
-    } catch (error) {
-      console.error(`[consumable-tracker] nudge failed for user ${user.id}:`, (error as Error).message);
+
+      await saveUserPatterns(userPhone, { reorder_intervals: reorderIntervals });
     }
+  } catch (error) {
+    logError("Consumable Tracker failed", error);
   }
 }

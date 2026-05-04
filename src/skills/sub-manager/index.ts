@@ -1,60 +1,43 @@
-import { getRenewalsByDate, updateSubscriptionDecision } from "../../db/subscriptions.js";
-import { listUsers } from "../../db/users.js";
-import { readPrefs } from "../../memory/memory.js";
-import { sendViaPreferredChannel } from "../../services/channel-delivery.js";
+import { supabase } from "../../services/supabaseWriter";
+import { sendWhatsAppMessage } from "../../services/whatsappSender";
+import { getUserPrefs } from "../../utils/memory";
+import { isWithinQuietHours, canSendAlert } from "../../utils/alertHelpers";
+import { log, logError } from "../../utils/logger";
 
-export async function runSubManagerPromptSkill(): Promise<void> {
-  let users;
-  try {
-    users = await listUsers();
-  } catch (error) {
-    console.error("[sub-manager] failed to list users:", (error as Error).message);
-    return;
-  }
-  const upcomingDate = new Date();
-  upcomingDate.setDate(upcomingDate.getDate() + 5);
-  const maxDateIso = upcomingDate.toISOString().slice(0, 10);
-  let renewals;
-  try {
-    renewals = await getRenewalsByDate(maxDateIso);
-  } catch (error) {
-    console.error("[sub-manager] failed to fetch renewals:", (error as Error).message);
-    return;
-  }
+export async function runSubscriptionManager(): Promise<void> {
+  log("Running Subscription Manager skill...");
 
-  for (const user of users) {
-    try {
-      const prefs = await readPrefs(user.phone);
-      const alertTimingDays = prefs?.alertTimingDays ?? 3;
-      for (const sub of renewals.filter((s) => s.user_id === user.id && !s.user_decision)) {
-        const days = Math.floor(
-          (new Date(sub.renewal_date).getTime() - new Date().setHours(0, 0, 0, 0)) / (1000 * 60 * 60 * 24)
-        );
-        if (days > alertTimingDays) continue;
-        await sendViaPreferredChannel(
-          user,
-          prefs,
-          `Your subscription "${sub.name}" renews on ${sub.renewal_date}. Reply KEEP or CANCEL for ${sub.id}.`
-        );
-      }
-    } catch (error) {
-      console.error(`[sub-manager] failed for user ${user.id}:`, (error as Error).message);
+  try {
+    const sevenDaysFromNow = new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0];
+    const today = new Date().toISOString().split("T")[0];
+
+    const { data: subs, error } = await supabase
+      .from("subscriptions")
+      .select("*")
+      .eq("status", "active")
+      .gte("renewal_date", today)
+      .lte("renewal_date", sevenDaysFromNow);
+
+    if (error) {
+      logError("Subscription Manager query failed", error);
+      return;
     }
-  }
-}
 
-export async function handleSubscriptionReply(messageText: string): Promise<string> {
-  const normalized = messageText.trim().toUpperCase();
-  const keep = normalized.match(/^KEEP\s+([a-f0-9-]{36})$/i);
-  const cancel = normalized.match(/^CANCEL\s+([a-f0-9-]{36})$/i);
+    if (!subs || subs.length === 0) {
+      log("Subscription Manager: no upcoming renewals");
+      return;
+    }
 
-  if (keep?.[1]) {
-    await updateSubscriptionDecision(keep[1], "KEEP");
-    return `Confirmed: subscription ${keep[1]} marked KEEP.`;
+    for (const sub of subs) {
+      const prefs = await getUserPrefs(sub.user_phone);
+      if (isWithinQuietHours(prefs)) continue;
+      if (!canSendAlert(sub.user_phone, prefs.max_alerts_per_hour)) continue;
+
+      const message = `${sub.service_name} renews on ${sub.renewal_date} for ${sub.currency} ${sub.renewal_amount}.\nReply KEEP to continue or CANCEL to record cancellation intent.`;
+      await sendWhatsAppMessage(sub.user_phone, message);
+      log(`Subscription alert sent: ${sub.service_name} → ${sub.user_phone}`);
+    }
+  } catch (error) {
+    logError("Subscription Manager failed", error);
   }
-  if (cancel?.[1]) {
-    await updateSubscriptionDecision(cancel[1], "CANCEL");
-    return `Confirmed: subscription ${cancel[1]} marked CANCEL.`;
-  }
-  return "Please reply in format: KEEP <subscription-id> or CANCEL <subscription-id>.";
 }
