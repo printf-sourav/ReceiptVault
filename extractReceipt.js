@@ -149,6 +149,18 @@ const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   return JSON.parse(cleaned);
 }
 
+const { validateReceipt } = require('./receiptSchema');
+
+// inside extractReceiptFromImage, replace the return line with:
+const parsed = JSON.parse(cleaned);
+const { data, valid, issues } = validateReceipt(parsed);
+
+if (!valid) {
+  console.warn('Validation issues:', issues);
+}
+
+return data; // always returns safe data, never throws
+
 // ── 3. RUN ───────────────────────────────────────────────────
 async function main() {
   const imagePath = './test-receipt.jpg'; // <-- change this to your receipt photo filename
