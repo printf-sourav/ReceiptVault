@@ -6,6 +6,8 @@ import {
   ScrollView,
   Pressable,
   Alert,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,6 +16,7 @@ import { BottomSheet } from '../../src/components/BottomSheet';
 import { PillButton } from '../../src/components/PillButton';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
+import { useAuth } from '../../context/AuthContext';
 
 interface SettingItem {
   label: string;
@@ -35,6 +38,9 @@ interface SettingSection {
 }
 
 export default function SettingsScreen() {
+  const { user, signOut } = useAuth();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
   const [deadlineAlerts, setDeadlineAlerts] = useState(true);
   const [spendingAlerts, setSpendingAlerts] = useState(true);
   const [vaultMode, setVaultMode] = useState(false);
@@ -44,14 +50,37 @@ export default function SettingsScreen() {
   const [frequencySheet, setFrequencySheet] = useState(false);
   const [clearSheet, setClearSheet] = useState(false);
 
+  const handleSignOut = async () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setIsSigningOut(true);
+    try {
+      await signOut();
+    } finally {
+      setIsSigningOut(false);
+    }
+  };
+
+  // Supabase stores Google profile data in user_metadata
+  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || null;
+  const email = user?.email || null;
+  const photoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+
+  const initials = displayName
+    ? displayName
+        .split(' ')
+        .map((n: string) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : 'RV';
+
   const settingSections: SettingSection[] = [
     {
       title: 'Profile',
       items: [
         {
-          label: 'Phone Number',
-          value: '+91 98765 43210',
-          badge: 'Verified ✓',
+          label: email || 'Not signed in',
+          badge: user ? 'Google ✓' : undefined,
           badgeColor: Colors.accentEmerald,
         },
         {
@@ -156,13 +185,38 @@ export default function SettingsScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header */}
+        {/* Header with user info */}
         <View style={styles.headerRow}>
           <Text style={styles.title}>Settings</Text>
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>RV</Text>
-          </View>
+          {photoUrl ? (
+            <Image source={{ uri: photoUrl }} style={styles.avatarImage} />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{initials}</Text>
+            </View>
+          )}
         </View>
+
+        {/* User profile card — shows Google account details */}
+        {user && (
+          <View style={styles.profileCard}>
+            {photoUrl ? (
+              <Image source={{ uri: photoUrl }} style={styles.profilePhoto} />
+            ) : (
+              <View style={styles.profilePhotoFallback}>
+                <Text style={styles.profilePhotoFallbackText}>{initials}</Text>
+              </View>
+            )}
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {displayName || 'ReceiptVault User'}
+              </Text>
+              <Text style={styles.profileEmail} numberOfLines={1}>
+                {email}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {settingSections.map((section) => (
           <View key={section.title} style={styles.section}>
@@ -231,6 +285,23 @@ export default function SettingsScreen() {
             </View>
           </View>
         ))}
+
+        {/* Sign Out Button */}
+        <Pressable
+          onPress={handleSignOut}
+          disabled={isSigningOut}
+          style={({ pressed }) => [
+            styles.signOutBtn,
+            pressed && { opacity: 0.8 },
+            isSigningOut && { opacity: 0.5 },
+          ]}
+        >
+          {isSigningOut ? (
+            <ActivityIndicator size="small" color={Colors.accentRose} />
+          ) : (
+            <Text style={styles.signOutText}>Sign Out</Text>
+          )}
+        </Pressable>
 
         <View style={{ height: 100 }} />
       </ScrollView>
@@ -344,7 +415,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 16,
   },
   title: {
     fontFamily: Fonts.heading,
@@ -365,6 +436,80 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm,
     color: Colors.bgPrimary,
   },
+  avatarImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    borderColor: Colors.accentCyan,
+  },
+
+  // User profile card
+  profileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bgSecondary,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    padding: 16,
+    marginBottom: 20,
+    gap: 14,
+  },
+  profilePhoto: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: Colors.accentCyan,
+  },
+  profilePhotoFallback: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: Colors.accentCyan,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profilePhotoFallbackText: {
+    fontFamily: Fonts.heading,
+    fontSize: FontSizes.md,
+    color: Colors.bgPrimary,
+  },
+  profileInfo: {
+    flex: 1,
+  },
+  profileName: {
+    fontFamily: Fonts.heading,
+    fontSize: FontSizes.md,
+    color: Colors.textPrimary,
+    letterSpacing: -0.3,
+    marginBottom: 2,
+  },
+  profileEmail: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+  },
+
+  // Sign-out button
+  signOutBtn: {
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: Colors.accentRose + '40',
+    backgroundColor: Colors.accentRose + '10',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  signOutText: {
+    fontFamily: Fonts.heading,
+    fontSize: FontSizes.base,
+    color: Colors.accentRose,
+    letterSpacing: -0.3,
+  },
+
   section: {
     marginBottom: 20,
   },

@@ -7,6 +7,8 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
+  ActivityIndicator,
+  Image,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,13 +24,15 @@ import Animated, {
 import * as Haptics from 'expo-haptics';
 import { Colors } from '../src/constants/colors';
 import { Fonts, FontSizes } from '../src/constants/typography';
-import { MonoText } from '../src/components/MonoText';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useAuth } from '../context/AuthContext';
 
 const CORRECT_OTP = '123456';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { signInWithGoogle, signInWithOtp, isAuthenticating, error, clearError } = useAuth();
+
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -40,10 +44,16 @@ export default function LoginScreen() {
   const otpContainerOpacity = useSharedValue(0);
   const otpContainerY = useSharedValue(20);
   const shakeX = useSharedValue(0);
-
   const boxStagger = Array.from({ length: 6 }, () => useSharedValue(0));
-
   const phoneBorderColor = useSharedValue(0);
+
+  // Animate the Google button in after a short delay
+  const googleBtnOpacity = useSharedValue(0);
+  const googleBtnY = useSharedValue(15);
+  useEffect(() => {
+    googleBtnOpacity.value = withDelay(200, withTiming(1, { duration: 500 }));
+    googleBtnY.value = withDelay(200, withSpring(0, { damping: 15 }));
+  }, []);
 
   useEffect(() => {
     phoneBorderColor.value = withTiming(phoneFocused ? 1 : 0, {
@@ -57,6 +67,11 @@ export default function LoginScreen() {
       [0, 1],
       [Colors.borderSubtle, Colors.borderActive]
     ),
+  }));
+
+  const googleBtnStyle = useAnimatedStyle(() => ({
+    opacity: googleBtnOpacity.value,
+    transform: [{ translateY: googleBtnY.value }],
   }));
 
   const handleSendOtp = () => {
@@ -90,14 +105,12 @@ export default function LoginScreen() {
     }
   };
 
-  const handleVerify = () => {
+  const handleVerify = async () => {
     const enteredOtp = otp.join('');
     if (enteredOtp === CORRECT_OTP) {
       setOtpSuccess(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setTimeout(() => {
-        router.replace('/(tabs)');
-      }, 600);
+      await signInWithOtp();
     } else {
       setOtpError(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -108,6 +121,12 @@ export default function LoginScreen() {
         withTiming(0, { duration: 80 })
       );
     }
+  };
+
+  const handleGoogleSignIn = async () => {
+    clearError();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await signInWithGoogle();
   };
 
   const shakeStyle = useAnimatedStyle(() => ({
@@ -130,6 +149,40 @@ export default function LoginScreen() {
           <Text style={styles.subtitle}>Enter your number to continue</Text>
         </View>
 
+        {/* ── Google Sign-In Button ── */}
+        <Animated.View style={googleBtnStyle}>
+          <Pressable
+            onPress={handleGoogleSignIn}
+            disabled={isAuthenticating}
+            style={({ pressed }) => [
+              styles.googleBtn,
+              pressed && styles.googleBtnPressed,
+              isAuthenticating && styles.googleBtnDisabled,
+            ]}
+          >
+            {isAuthenticating ? (
+              <ActivityIndicator size="small" color={Colors.accentCyan} />
+            ) : (
+              <Text style={styles.googleIcon}>G</Text>
+            )}
+            <Text style={styles.googleBtnText}>
+              {isAuthenticating ? 'Signing in…' : 'Continue with Google'}
+            </Text>
+          </Pressable>
+
+          {error && (
+            <Text style={styles.errorText}>{error}</Text>
+          )}
+        </Animated.View>
+
+        {/* ── Divider ── */}
+        <View style={styles.dividerRow}>
+          <View style={styles.dividerLine} />
+          <Text style={styles.dividerText}>or</Text>
+          <View style={styles.dividerLine} />
+        </View>
+
+        {/* ── Phone Number Input ── */}
         <Animated.View style={[styles.phoneRow, phoneBorderStyle]}>
           <View style={styles.countryCode}>
             <Text style={styles.flag}>🇮🇳</Text>
@@ -172,7 +225,6 @@ export default function LoginScreen() {
             <Text style={styles.otpLabel}>Enter verification code</Text>
             <Animated.View style={[styles.otpRow, shakeStyle]}>
               {otp.map((digit, index) => {
-                const boxScale = boxStagger[index];
                 return (
                   <Animated.View
                     key={index}
@@ -239,7 +291,7 @@ const styles = StyleSheet.create({
     paddingTop: 60,
   },
   header: {
-    marginBottom: 40,
+    marginBottom: 32,
   },
   title: {
     fontFamily: Fonts.heading,
@@ -253,6 +305,65 @@ const styles = StyleSheet.create({
     fontSize: FontSizes.sm + 1,
     color: Colors.textSecondary,
   },
+
+  // Google Sign-In
+  googleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: Colors.bgSecondary,
+    borderWidth: 1,
+    borderColor: Colors.borderGlow,
+    gap: 12,
+    marginBottom: 8,
+  },
+  googleBtnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.97 }],
+  },
+  googleBtnDisabled: {
+    opacity: 0.6,
+  },
+  googleIcon: {
+    fontFamily: Fonts.heading,
+    fontSize: FontSizes.lg,
+    color: Colors.accentCyan,
+  },
+  googleBtnText: {
+    fontFamily: Fonts.bodyMedium,
+    fontSize: FontSizes.base,
+    color: Colors.textPrimary,
+  },
+  errorText: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.xs,
+    color: Colors.accentRose,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 4,
+  },
+
+  // Divider
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: Colors.borderSubtle,
+  },
+  dividerText: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.sm,
+    color: Colors.textMuted,
+    marginHorizontal: 16,
+  },
+
+  // Phone input
   phoneRow: {
     flexDirection: 'row',
     height: 56,
