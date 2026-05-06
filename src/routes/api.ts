@@ -22,23 +22,21 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Valid phone number required" });
     }
 
-    const normalized = phone.replace(/[\s\-\+]/g, "");
-    const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
-
-    const { data: existingUser } = await supabase
+    const canonicalPhone = normalizePhone(phone);
+    const { data: existingUsers } = await supabase
       .from("users")
-      .select("id")
-      .eq("phone", fullPhone)
-      .single();
+      .select("id, phone")
+      .in("phone", getPhoneVariants(phone))
+      .limit(1);
 
-    if (!existingUser) {
+    if (!existingUsers || existingUsers.length === 0) {
       return res.status(404).json({
         success: false,
         error: "Phone number is not registered. Use Google sign-in first to register.",
       });
     }
 
-    const result = await sendOtp(phone);
+    const result = await sendOtp(canonicalPhone);
     if (result.success) {
       res.json({ success: true, message: "OTP sent to your WhatsApp" });
     } else {
@@ -58,20 +56,21 @@ router.post("/auth/verify-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Phone and OTP required" });
     }
 
-    const result = verifyOtp(phone, otp);
+    const canonicalPhone = normalizePhone(phone);
+    const result = verifyOtp(canonicalPhone, otp);
     if (!result.valid) {
       return res.status(401).json({ success: false, error: result.error });
     }
 
     // OTP valid — only allow already registered users
-    const normalized = phone.replace(/[\s\-\+]/g, "");
-    const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
-
-    const { data: user } = await supabase
+    const { data: users } = await supabase
       .from("users")
       .select("id, phone, created_at")
-      .eq("phone", fullPhone)
-      .single();
+      .in("phone", getPhoneVariants(phone))
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const user = users?.[0];
 
     if (!user) {
       return res.status(404).json({
@@ -101,9 +100,7 @@ router.post("/auth/registration-status", async (req: Request, res: Response) => 
     if (email) {
       query = query.eq("email", email).limit(1);
     } else if (phone) {
-      const normalized = phone.replace(/[\s\-\+]/g, "");
-      const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
-      query = query.eq("phone", fullPhone).limit(1);
+      query = query.in("phone", getPhoneVariants(phone)).limit(1);
     }
 
     const { data, error } = await query.single();
@@ -127,30 +124,37 @@ router.post("/auth/registration-status", async (req: Request, res: Response) => 
 // POST /api/auth/register-oauth — links a Google user to a phone number
 router.post("/auth/register-oauth", async (req: Request, res: Response) => {
   try {
-    const { phone, email, displayName } = req.body;
+    const { phone, email, displayName, emailVerified } = req.body;
 
     if (!phone || !email) {
       return res.status(400).json({ error: "Phone and email are required" });
     }
 
-    const normalized = phone.replace(/[\s\-\+]/g, "");
-    const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
+    if (!emailVerified) {
+      return res.status(400).json({ error: "Email verification is required for registration" });
+    }
 
-    const { data: existingByPhone } = await supabase
+    const canonicalPhone = normalizePhone(phone);
+
+    const { data: existingByPhoneRows } = await supabase
       .from("users")
       .select("id, phone, email, display_name")
-      .eq("phone", fullPhone)
-      .single();
+      .in("phone", getPhoneVariants(phone))
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const existingByPhone = existingByPhoneRows?.[0];
 
     if (existingByPhone) {
       const { data: updatedUser, error } = await supabase
         .from("users")
         .update({
           email,
+          phone: canonicalPhone,
           display_name: displayName || existingByPhone.display_name,
           last_active_at: new Date().toISOString(),
         })
-        .eq("phone", fullPhone)
+        .eq("id", existingByPhone.id)
         .select("id, phone, email, display_name")
         .single();
 
@@ -158,21 +162,24 @@ router.post("/auth/register-oauth", async (req: Request, res: Response) => {
       return res.json({ success: true, user: updatedUser, isNew: false });
     }
 
-    const { data: existingByEmail } = await supabase
+    const { data: existingByEmailRows } = await supabase
       .from("users")
       .select("id, phone, email, display_name")
       .eq("email", email)
-      .single();
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const existingByEmail = existingByEmailRows?.[0];
 
     if (existingByEmail) {
       const { data: updatedUser, error } = await supabase
         .from("users")
         .update({
-          phone: fullPhone,
+          phone: canonicalPhone,
           display_name: displayName || existingByEmail.display_name,
           last_active_at: new Date().toISOString(),
         })
-        .eq("email", email)
+        .eq("id", existingByEmail.id)
         .select("id, phone, email, display_name")
         .single();
 
@@ -183,7 +190,7 @@ router.post("/auth/register-oauth", async (req: Request, res: Response) => {
     const { data: newUser, error } = await supabase
       .from("users")
       .insert({
-        phone: fullPhone,
+        phone: canonicalPhone,
         email,
         display_name: displayName || null,
         last_active_at: new Date().toISOString(),
@@ -250,7 +257,7 @@ function requirePhone(req: Request, res: Response, next: Function) {
   if (!phone) {
     return res.status(401).json({ error: "Missing X-User-Phone header" });
   }
-  (req as any).userPhone = phone;
+  (req as any).userPhone = normalizePhone(phone);
   next();
 }
 
@@ -579,6 +586,30 @@ router.get("/dashboard/stats", async (req: Request, res: Response) => {
 });
 
 // ---------- HELPERS ----------
+function normalizePhone(phone: string): string {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  if (String(phone).startsWith("+")) return String(phone);
+  return `+${digits}`;
+}
+
+function getPhoneVariants(phone: string): string[] {
+  const digits = String(phone || "").replace(/\D/g, "");
+  const canonical = normalizePhone(phone);
+  const variants = new Set<string>([canonical]);
+
+  if (digits.length === 10) {
+    variants.add(`91${digits}`);
+  }
+  if (digits.length === 12 && digits.startsWith("91")) {
+    variants.add(digits);
+    variants.add(`+${digits}`);
+  }
+
+  return [...variants];
+}
+
 function guessCategory(storeName: string, items: any[]): string {
   const name = storeName.toLowerCase();
   if (name.includes("grocery") || name.includes("supermarket")) return "Groceries";

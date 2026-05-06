@@ -4,6 +4,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const STORAGE_KEY_BASE_URL = 'rv_api_url';
 const STORAGE_KEY_PHONE = 'rv_user_phone';
 
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+  if (phone.startsWith('+')) return phone;
+  return `+${digits}`;
+}
+
 // Use environment variable or localhost default
 let BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -27,7 +35,7 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(async (config) => {
   const phone = await AsyncStorage.getItem(STORAGE_KEY_PHONE);
   if (phone) {
-    config.headers['x-user-phone'] = phone;
+    config.headers['x-user-phone'] = normalizePhone(phone);
   }
   return config;
 });
@@ -50,7 +58,7 @@ export const getGoogleOAuthUrl = () =>
 export const getRegistrationStatus = (payload: { email?: string; phone?: string }) =>
   api.post('/auth/registration-status', payload);
 
-export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string }) =>
+export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string; emailVerified: boolean }) =>
   api.post('/auth/register-oauth', payload);
 
 // Receipt endpoints
@@ -88,7 +96,7 @@ export const getReceipt = (id: string) =>
 
 // User persistence
 export const saveUserPhone = async (phone: string) => {
-  await AsyncStorage.setItem(STORAGE_KEY_PHONE, phone);
+  await AsyncStorage.setItem(STORAGE_KEY_PHONE, normalizePhone(phone));
 };
 
 export const getUserPhone = () =>

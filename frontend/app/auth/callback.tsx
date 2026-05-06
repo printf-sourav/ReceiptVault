@@ -49,6 +49,15 @@ export default function AuthCallbackScreen() {
             console.log('Session set successfully from OAuth token');
             const { data } = await supabase.auth.getSession();
             if (data.session) {
+              if (!isEmailVerified(data.session.user)) {
+                await supabase.auth.signOut();
+                const msg = 'Email verification is required before registration.';
+                setDebugInfo(msg);
+                setMessage('Email verification required. Redirecting...');
+                setTimeout(() => router.replace('/login'), 2000);
+                return;
+              }
+
               const email = data.session.user.email;
               if (email) {
                 const statusResponse = await getRegistrationStatus({ email });
@@ -101,6 +110,15 @@ export default function AuthCallbackScreen() {
 
         const { data } = await supabase.auth.getSession();
         if (data.session) {
+          if (!isEmailVerified(data.session.user)) {
+            await supabase.auth.signOut();
+            const msg = 'Email verification is required before registration.';
+            setDebugInfo(msg);
+            setMessage('Email verification required. Redirecting...');
+            setTimeout(() => router.replace('/login'), 2000);
+            return;
+          }
+
           const email = data.session.user.email;
           if (email) {
             const statusResponse = await getRegistrationStatus({ email });
@@ -197,3 +215,8 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
   },
 });
+
+function isEmailVerified(user: any): boolean {
+  if (user?.email_confirmed_at) return true;
+  return user?.user_metadata?.email_verified === true;
+}

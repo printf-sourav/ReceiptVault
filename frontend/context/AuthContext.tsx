@@ -161,9 +161,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const { data } = await verifyOtp(phone, otp);
 
         if (data.success) {
-          // Save phone for future requests
-          await saveUserPhone(phone);
-          setUserPhone(phone);
+          if (session) {
+            await supabase.auth.signOut();
+            setSession(null);
+          }
+
+          // Save canonical phone from backend user record.
+          const canonicalPhone = data?.user?.phone || phone;
+          await saveUserPhone(canonicalPhone);
+          setUserPhone(canonicalPhone);
         } else {
           throw new Error(data.error || 'OTP verification failed');
         }
@@ -175,7 +181,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setIsAuthenticating(false);
       }
     },
-    []
+    [session]
   );
 
   // ============================================================
@@ -256,11 +262,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error('OAuth account does not include an email address');
         }
 
+        if (!isEmailVerified(session.user)) {
+          throw new Error('Email verification is required before registration.');
+        }
+
         const displayName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || undefined;
         const { data } = await registerOAuthUser({
           phone,
           email,
           displayName,
+          emailVerified: isEmailVerified(session.user),
         });
 
         await saveUserPhone(data?.user?.phone || phone);
@@ -320,6 +331,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       {children}
     </AuthContext.Provider>
   );
+}
+
+function isEmailVerified(user: User): boolean {
+  if (user.email_confirmed_at) return true;
+  return user.user_metadata?.email_verified === true;
 }
 
 // Convenience hook
