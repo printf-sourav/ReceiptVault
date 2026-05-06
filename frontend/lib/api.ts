@@ -4,7 +4,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const STORAGE_KEY_BASE_URL = 'rv_api_url';
 const STORAGE_KEY_PHONE = 'rv_user_phone';
 
-let BASE_URL = 'http://localhost:3000';
+// Use environment variable or localhost default
+let BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
 
 // Try to restore saved base URL
 AsyncStorage.getItem(STORAGE_KEY_BASE_URL).then((url) => {
@@ -47,9 +48,27 @@ export const getGoogleOAuthUrl = () =>
   axios.get(`${BASE_URL}/api/auth/google-url`);
 
 // Receipt endpoints
-export const uploadReceipt = (file: File) => {
+export const uploadReceipt = async (fileOrUri: File | string) => {
   const formData = new FormData();
-  formData.append('receipt', file);
+  
+  // Handle both Web File objects and React Native image URIs
+  if (typeof fileOrUri === 'string') {
+    // React Native - image URI from ImagePicker
+    const filename = fileOrUri.split('/').pop() || 'receipt.jpg';
+    const match = /\.(\w+)$/.exec(filename);
+    const type = match ? `image/${match[1]}` : 'image/jpeg';
+    
+    // Create a blob-like object from the URI
+    formData.append('receipt', {
+      uri: fileOrUri,
+      type,
+      name: filename,
+    } as any);
+  } else {
+    // Web File object
+    formData.append('receipt', fileOrUri);
+  }
+  
   return api.post('/upload-receipt', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });

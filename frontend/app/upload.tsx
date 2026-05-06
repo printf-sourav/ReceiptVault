@@ -19,7 +19,7 @@ import { GlowCard } from '../src/components/GlowCard';
 import { MonoText } from '../src/components/MonoText';
 import { Colors } from '../src/constants/colors';
 import { Fonts, FontSizes } from '../src/constants/typography';
-import { uploadReceipt } from '../src/lib/api';
+import { uploadReceipt } from '../lib/api';
 import { formatIndianCurrency } from '../src/lib/mockData';
 
 export default function UploadReceiptScreen() {
@@ -67,11 +67,12 @@ export default function UploadReceiptScreen() {
 
     try {
       const res = await uploadReceipt(imageUri);
-      if (res.success && res.receipt) {
-        setResult(res.receipt);
+      const data = res.data;
+      if (res.status === 200 && data.receipt) {
+        setResult(data.receipt);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       } else {
-        setError(res.error || 'Upload failed');
+        setError(data.error || 'Upload failed');
       }
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message || 'Upload failed. Check server connection.');

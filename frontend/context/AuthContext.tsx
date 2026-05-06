@@ -9,7 +9,7 @@ import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
-import { sendOtp, verifyOtp, saveUserPhone, getUserPhone, clearUserData, getGoogleOAuthUrl } from '../lib/api';
+import { sendOtp, verifyOtp, saveUserPhone, getUserPhone, clearUserData } from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Ensures the browser auth popup closes and redirects back properly
@@ -155,45 +155,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   // ============================================================
-  // GOOGLE OAUTH FLOW
-  // 1. Ask backend for a Google OAuth URL
-  // 2. Open it in an in-app browser
-  // 3. Handle the redirect and session setup
+  // GOOGLE OAUTH FLOW (via Supabase)
+  // 1. Open Google sign-in in web browser
+  // 2. Supabase handles the OAuth exchange
+  // 3. User is authenticated and session is created
   // ============================================================
   const signInWithGoogle = useCallback(async () => {
     try {
       setError(null);
       setIsAuthenticating(true);
 
-      // Get Google OAuth URL from backend
-      const { data } = await getGoogleOAuthUrl();
+      // Use Supabase's built-in OAuth method for Google
+      const { data, error: supabaseError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUri,
+          skipBrowserRedirect: false,
+        },
+      });
 
-      if (!data.success || !data.url) {
-        setError('Failed to start Google sign-in.');
-        setIsAuthenticating(false);
-        return;
+      if (supabaseError) {
+        throw supabaseError;
       }
 
-      // Open the OAuth URL in a web browser
-      const result = await WebBrowser.openAuthSessionAsync(
-        data.url,
-        redirectUri,
-      );
+      // On native platforms, opening the URL in browser handles the redirect automatically
+      if (data.url) {
+        const result = await WebBrowser.openAuthSessionAsync(
+          data.url,
+          redirectUri,
+        );
 
-      if (result.type === 'success' && result.url) {
-        // Supabase/backend handles the redirect and sets up session
-        // Check if session was created
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (sessionData.session) {
-          setSession(sessionData.session);
-        } else {
-          setError('Authentication incomplete. Please try again.');
+        if (result.type === 'success') {
+          // Session will be set automatically via auth state listener
+          const { data: sessionData } = await supabase.auth.getSession();
+          if (sessionData.session) {
+            setSession(sessionData.session);
+          }
+        } else if (result.type === 'cancel' || result.type === 'dismiss') {
+          // User cancelled — not an error
         }
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        // User cancelled — not an error
       }
     } catch (err: any) {
-      setError(getErrorMessage(err));
+      const message = getErrorMessage(err);
+      setError(message);
+      console.error('Google sign-in error:', err);
     } finally {
       setIsAuthenticating(false);
     }

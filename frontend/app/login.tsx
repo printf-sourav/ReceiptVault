@@ -477,6 +477,9 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   verifyBtn: {},
+  btnDisabled: {
+    opacity: 0.6,
+  },
   hint: {
     fontFamily: Fonts.bodyRegular,
     fontSize: FontSizes.xs,
