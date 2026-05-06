@@ -157,7 +157,7 @@ router.post("/upload-receipt", upload.single("receipt"), async (req: Request, re
     const validated = validateReceiptData(rawData);
 
     // 4. Insert into Supabase
-    const receiptId = await insertReceipt(validated, r2Url, phone, "whatsapp");
+    const receiptId = await insertReceipt(validated, r2Url, phone);
 
     // 5. Return the new receipt
     const { data: receipt } = await supabase
