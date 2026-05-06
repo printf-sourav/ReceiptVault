@@ -9,18 +9,18 @@ import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
+import { sendOtp, verifyOtp, saveUserPhone, getUserPhone, clearUserData, getGoogleOAuthUrl } from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Ensures the browser auth popup closes and redirects back properly
 WebBrowser.maybeCompleteAuthSession();
 
 const OTP_AUTH_KEY = 'receiptvault_otp_auth';
+const PHONE_KEY = 'receiptvault_user_phone';
 
 // ============================================================
 // REDIRECT URI
-// Tells Supabase where to send the user after Google login.
-// - In Expo Go: uses the Expo proxy (auth.expo.io)
-// - In standalone builds: uses the app's custom scheme
+// Tells OAuth where to send the user after Google login.
 // ============================================================
 const redirectUri = makeRedirectUri({
   scheme: 'receiptvault',
@@ -33,12 +33,14 @@ const redirectUri = makeRedirectUri({
 interface AuthContextType {
   session: Session | null;
   user: User | null;
+  userPhone: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   isAuthenticating: boolean;
   error: string | null;
   signInWithGoogle: () => Promise<void>;
-  signInWithOtp: () => Promise<void>;
+  signInWithOtp: (phone: string, otp: string) => Promise<void>;
+  sendOtpCode: (phone: string) => Promise<{ success: boolean; error?: string }>;
   signOut: () => Promise<void>;
   clearError: () => void;
 }
@@ -46,12 +48,14 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   session: null,
   user: null,
+  userPhone: null,
   isAuthenticated: false,
   isLoading: true,
   isAuthenticating: false,
   error: null,
   signInWithGoogle: async () => {},
   signInWithOtp: async () => {},
+  sendOtpCode: async () => ({ success: false }),
   signOut: async () => {},
   clearError: () => {},
 });
@@ -60,31 +64,35 @@ const AuthContext = createContext<AuthContextType>({
 // AUTH PROVIDER
 // Supports two auth methods:
 //   1. Google OAuth via Supabase (full user profile)
-//   2. OTP login → local session (persisted in AsyncStorage)
+//   2. OTP login via backend (phone verification)
 // ============================================================
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [otpAuthenticated, setOtpAuthenticated] = useState(false);
+  const [userPhone, setUserPhone] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // On mount, restore any existing Supabase session and
-  // check if the user previously logged in via OTP
+  // On mount, restore any existing Supabase session and user phone
   useEffect(() => {
     const init = async () => {
-      const [sessionResult, otpResult] = await Promise.all([
-        supabase.auth.getSession(),
-        AsyncStorage.getItem(OTP_AUTH_KEY),
-      ]);
+      try {
+        const [sessionResult, phoneResult] = await Promise.all([
+          supabase.auth.getSession(),
+          getUserPhone(),
+        ]);
 
-      if (sessionResult.data.session) {
-        setSession(sessionResult.data.session);
+        if (sessionResult.data.session) {
+          setSession(sessionResult.data.session);
+        }
+        if (phoneResult) {
+          setUserPhone(phoneResult);
+        }
+      } catch (err) {
+        console.error('Auth init error:', err);
+      } finally {
+        setIsLoading(false);
       }
-      if (otpResult === 'true') {
-        setOtpAuthenticated(true);
-      }
-      setIsLoading(false);
     };
     init();
 
@@ -95,32 +103,73 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
     );
 
-    return () => subscription.unsubscribe();
+    return () => subscription?.unsubscribe();
   }, []);
 
   // ============================================================
+  // OTP FLOW
+  // 1. Send OTP via backend WhatsApp integration
+  // 2. User verifies code
+  // 3. Backend returns user or creates one
+  // ============================================================
+  const sendOtpCode = useCallback(
+    async (phone: string) => {
+      try {
+        setError(null);
+        const { data } = await sendOtp(phone);
+        return { success: true };
+      } catch (err: any) {
+        const message = err?.response?.data?.error || err.message || 'Failed to send OTP';
+        setError(message);
+        return { success: false, error: message };
+      }
+    },
+    []
+  );
+
+  const signInWithOtp = useCallback(
+    async (phone: string, otp: string) => {
+      try {
+        setError(null);
+        setIsAuthenticating(true);
+
+        // Verify OTP via backend
+        const { data } = await verifyOtp(phone, otp);
+
+        if (data.success) {
+          // Save phone for future requests
+          await saveUserPhone(phone);
+          setUserPhone(phone);
+        } else {
+          throw new Error(data.error || 'OTP verification failed');
+        }
+      } catch (err: any) {
+        const message = getErrorMessage(err);
+        setError(message);
+        throw err;
+      } finally {
+        setIsAuthenticating(false);
+      }
+    },
+    []
+  );
+
+  // ============================================================
   // GOOGLE OAUTH FLOW
-  // 1. Ask Supabase for a Google OAuth URL
-  // 2. Open it in an in-app browser via expo-web-browser
-  // 3. Supabase redirects back with a session in the URL fragment
-  // 4. Extract the tokens and set the session
+  // 1. Ask backend for a Google OAuth URL
+  // 2. Open it in an in-app browser
+  // 3. Handle the redirect and session setup
   // ============================================================
   const signInWithGoogle = useCallback(async () => {
     try {
       setError(null);
       setIsAuthenticating(true);
 
-      // Ask Supabase for the Google OAuth URL
-      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: redirectUri,
-          skipBrowserRedirect: true,
-        },
-      });
+      // Get Google OAuth URL from backend
+      const { data } = await getGoogleOAuthUrl();
 
-      if (oauthError || !data.url) {
-        setError(oauthError?.message || 'Failed to start Google sign-in.');
+      if (!data.success || !data.url) {
+        setError('Failed to start Google sign-in.');
         setIsAuthenticating(false);
         return;
       }
@@ -132,32 +181,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
 
       if (result.type === 'success' && result.url) {
-        // Extract access_token and refresh_token from the URL fragment
-        // Supabase returns them as hash params: #access_token=...&refresh_token=...
-        const url = new URL(result.url);
-
-        // Tokens may be in the fragment (#) or query (?)
-        const params = new URLSearchParams(
-          url.hash ? url.hash.substring(1) : url.search.substring(1),
-        );
-
-        const accessToken = params.get('access_token');
-        const refreshToken = params.get('refresh_token');
-
-        if (accessToken && refreshToken) {
-          const { error: sessionError } = await supabase.auth.setSession({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-          });
-
-          if (sessionError) {
-            setError('Failed to establish session. Please try again.');
-          }
+        // Supabase/backend handles the redirect and sets up session
+        // Check if session was created
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (sessionData.session) {
+          setSession(sessionData.session);
         } else {
           setError('Authentication incomplete. Please try again.');
         }
       } else if (result.type === 'cancel' || result.type === 'dismiss') {
-        // User closed the browser — not an error
+        // User cancelled — not an error
       }
     } catch (err: any) {
       setError(getErrorMessage(err));
@@ -166,16 +199,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // OTP sign-in: persists a flag so the session survives app restarts
-  const signInWithOtp = useCallback(async () => {
-    await AsyncStorage.setItem(OTP_AUTH_KEY, 'true');
-    setOtpAuthenticated(true);
-  }, []);
-
   const signOut = useCallback(async () => {
     try {
-      await AsyncStorage.removeItem(OTP_AUTH_KEY);
-      setOtpAuthenticated(false);
+      await clearUserData();
+      setUserPhone(null);
       const { error: signOutError } = await supabase.auth.signOut();
       if (signOutError) {
         setError('Failed to sign out. Please try again.');
@@ -188,19 +215,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearError = useCallback(() => setError(null), []);
 
   const user = session?.user ?? null;
-  const isAuthenticated = !!session || otpAuthenticated;
+  const isAuthenticated = !!session || !!userPhone;
 
   return (
     <AuthContext.Provider
       value={{
         session,
         user,
+        userPhone,
         isAuthenticated,
         isLoading,
         isAuthenticating,
         error,
         signInWithGoogle,
         signInWithOtp,
+        sendOtpCode,
         signOut,
         clearError,
       }}
@@ -228,6 +257,9 @@ function getErrorMessage(err: any): string {
   }
   if (err?.message?.includes('popup') || err?.message?.includes('cancel')) {
     return 'Sign-in was cancelled.';
+  }
+  if (err?.response?.data?.error) {
+    return err.response.data.error;
   }
   return err?.message || 'An unexpected error occurred. Please try again.';
 }

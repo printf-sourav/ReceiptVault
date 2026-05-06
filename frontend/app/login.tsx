@@ -27,11 +27,9 @@ import { Fonts, FontSizes } from '../src/constants/typography';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../context/AuthContext';
 
-const CORRECT_OTP = '123456';
-
 export default function LoginScreen() {
   const router = useRouter();
-  const { signInWithGoogle, signInWithOtp, isAuthenticating, error, clearError } = useAuth();
+  const { signInWithGoogle, signInWithOtp, sendOtpCode, isAuthenticating, error, clearError } = useAuth();
 
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -39,6 +37,7 @@ export default function LoginScreen() {
   const [phoneFocused, setPhoneFocused] = useState(false);
   const [otpError, setOtpError] = useState(false);
   const [otpSuccess, setOtpSuccess] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
   const otpRefs = useRef<(TextInput | null)[]>([]);
 
   const otpContainerOpacity = useSharedValue(0);
@@ -74,17 +73,24 @@ export default function LoginScreen() {
     transform: [{ translateY: googleBtnY.value }],
   }));
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     if (phone.length < 10) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setOtpSent(true);
+    clearError();
+    
+    setOtpSending(true);
+    const result = await sendOtpCode(phone);
+    setOtpSending(false);
 
-    otpContainerOpacity.value = withDelay(100, withTiming(1, { duration: 400 }));
-    otpContainerY.value = withDelay(100, withSpring(0, { damping: 15 }));
+    if (result.success) {
+      setOtpSent(true);
+      otpContainerOpacity.value = withDelay(100, withTiming(1, { duration: 400 }));
+      otpContainerY.value = withDelay(100, withSpring(0, { damping: 15 }));
 
-    boxStagger.forEach((sv, i) => {
-      sv.value = withDelay(200 + i * 50, withSpring(1, { damping: 12 }));
-    });
+      boxStagger.forEach((sv, i) => {
+        sv.value = withDelay(200 + i * 50, withSpring(1, { damping: 12 }));
+      });
+    }
   };
 
   const handleOtpChange = (value: string, index: number) => {
@@ -107,11 +113,19 @@ export default function LoginScreen() {
 
   const handleVerify = async () => {
     const enteredOtp = otp.join('');
-    if (enteredOtp === CORRECT_OTP) {
+    if (enteredOtp.length !== 6) {
+      setOtpError(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
+    try {
+      clearError();
+      await signInWithOtp(phone, enteredOtp);
       setOtpSuccess(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      await signInWithOtp();
-    } else {
+      // Navigation will happen automatically via the provider
+    } catch (err: any) {
       setOtpError(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       shakeX.value = withSequence(
@@ -203,9 +217,11 @@ export default function LoginScreen() {
 
         <Pressable
           onPress={handleSendOtp}
+          disabled={otpSending || isAuthenticating}
           style={({ pressed }) => [
             { transform: [{ scale: pressed ? 0.97 : 1 }] },
             styles.sendBtn,
+            (otpSending || isAuthenticating) && styles.btnDisabled,
           ]}
         >
           <LinearGradient
@@ -214,9 +230,13 @@ export default function LoginScreen() {
             end={{ x: 1, y: 0 }}
             style={styles.gradientBtn}
           >
-            <Text style={styles.btnText}>
-              {otpSent ? 'Resend OTP' : 'Send OTP'}
-            </Text>
+            {otpSending ? (
+              <ActivityIndicator size="small" color={Colors.textPrimary} />
+            ) : (
+              <Text style={styles.btnText}>
+                {otpSent ? 'Resend OTP' : 'Send OTP'}
+              </Text>
+            )}
           </LinearGradient>
         </Pressable>
 
@@ -255,9 +275,11 @@ export default function LoginScreen() {
 
             <Pressable
               onPress={handleVerify}
+              disabled={isAuthenticating}
               style={({ pressed }) => [
                 { transform: [{ scale: pressed ? 0.97 : 1 }] },
                 styles.verifyBtn,
+                isAuthenticating && styles.btnDisabled,
               ]}
             >
               <LinearGradient
@@ -266,13 +288,13 @@ export default function LoginScreen() {
                 end={{ x: 1, y: 0 }}
                 style={styles.gradientBtn}
               >
-                <Text style={styles.btnText}>Enter Vault</Text>
+                {isAuthenticating ? (
+                  <ActivityIndicator size="small" color={Colors.textPrimary} />
+                ) : (
+                  <Text style={styles.btnText}>Enter Vault</Text>
+                )}
               </LinearGradient>
             </Pressable>
-
-            <Text style={styles.hint}>
-              Hint: OTP is 123456
-            </Text>
           </Animated.View>
         )}
       </KeyboardAvoidingView>

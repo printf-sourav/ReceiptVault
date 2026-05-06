@@ -1,0 +1,74 @@
+import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const STORAGE_KEY_BASE_URL = 'rv_api_url';
+const STORAGE_KEY_PHONE = 'rv_user_phone';
+
+let BASE_URL = 'http://localhost:3000';
+
+// Try to restore saved base URL
+AsyncStorage.getItem(STORAGE_KEY_BASE_URL).then((url) => {
+  if (url) BASE_URL = url;
+});
+
+export const setBaseUrl = async (url: string) => {
+  BASE_URL = url;
+  await AsyncStorage.setItem(STORAGE_KEY_BASE_URL, url);
+};
+
+export const getBaseUrl = () => BASE_URL;
+
+// Interceptor: add auth headers
+const apiClient = axios.create({
+  baseURL: `${BASE_URL}/api`,
+});
+
+apiClient.interceptors.request.use(async (config) => {
+  const phone = await AsyncStorage.getItem(STORAGE_KEY_PHONE);
+  if (phone) {
+    config.headers['x-user-phone'] = phone;
+  }
+  return config;
+});
+
+export const api = apiClient;
+
+// Auth endpoints
+export const sendOtp = (phone: string) =>
+  api.post('/auth/send-otp', { phone });
+
+export const verifyOtp = (phone: string, otp: string) =>
+  api.post('/auth/verify-otp', { phone, otp });
+
+export const getOAuthConfig = () =>
+  api.get('/auth/oauth-config');
+
+export const getGoogleOAuthUrl = () =>
+  axios.get(`${BASE_URL}/api/auth/google-url`);
+
+// Receipt endpoints
+export const uploadReceipt = (file: File) => {
+  const formData = new FormData();
+  formData.append('receipt', file);
+  return api.post('/upload-receipt', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const getReceipts = (limit?: number) =>
+  api.get('/receipts', { params: { limit } });
+
+export const getReceipt = (id: string) =>
+  api.get(`/receipts/${id}`);
+
+// User persistence
+export const saveUserPhone = async (phone: string) => {
+  await AsyncStorage.setItem(STORAGE_KEY_PHONE, phone);
+};
+
+export const getUserPhone = () =>
+  AsyncStorage.getItem(STORAGE_KEY_PHONE);
+
+export const clearUserData = async () => {
+  await AsyncStorage.multiRemove([STORAGE_KEY_PHONE, STORAGE_KEY_BASE_URL]);
+};
