@@ -30,6 +30,7 @@ import { VaultLogo } from '../../src/components/VaultLogo';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 import { useData } from '../../src/hooks/useData';
+import { useAuth } from '../../context/AuthContext';
 import {
   formatIndianCurrency,
   getDaysLeft,
@@ -67,8 +68,22 @@ const BellIcon = ({ color, size }: { color: string; size: number }) => (
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { userPhone, user, linkedProfile } = useAuth();
   const { receipts, spendingByWeek, dashboardStats, loading, refetch } = useData();
   const [refreshing, setRefreshing] = useState(false);
+
+  const displayIdentity = useMemo(() => {
+    const displayName =
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      linkedProfile?.displayName;
+    if (displayName && displayName.trim().length > 0) return displayName;
+    if (!userPhone) return 'Welcome';
+    if (userPhone.startsWith('+')) return userPhone;
+    if (userPhone.length === 10) return `+91 ${userPhone}`;
+    if (userPhone.length === 12 && userPhone.startsWith('91')) return `+${userPhone}`;
+    return userPhone;
+  }, [linkedProfile?.displayName, user?.user_metadata?.full_name, user?.user_metadata?.name, userPhone]);
 
   const deadlineReceipts = useMemo(
     () =>
@@ -103,10 +118,65 @@ export default function HomeScreen() {
     [receipts]
   );
 
-  const thisWeekTotal = useMemo(
-    () => spendingByWeek.reduce((s, d) => s + d.amount, 0),
-    [spendingByWeek]
-  );
+  const computedThisWeekTotal = useMemo(() => {
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return receipts
+      .filter((r) => r.date >= sevenDaysAgo && r.date <= now)
+      .reduce((sum, r) => sum + r.amount, 0);
+  }, [receipts]);
+
+  const thisWeekTotal = useMemo(() => {
+    const chartTotal = spendingByWeek.reduce((sum, d) => sum + d.amount, 0);
+    return computedThisWeekTotal > 0 ? computedThisWeekTotal : chartTotal;
+  }, [computedThisWeekTotal, spendingByWeek]);
+
+  const computedThisMonthSpend = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    return receipts
+      .filter((r) => r.date.getMonth() === month && r.date.getFullYear() === year)
+      .reduce((sum, r) => sum + r.amount, 0);
+  }, [receipts]);
+
+  const thisMonthSpend = useMemo(() => {
+    if (typeof dashboardStats?.thisMonthSpend === 'number' && dashboardStats.thisMonthSpend > 0) {
+      return dashboardStats.thisMonthSpend;
+    }
+    return computedThisMonthSpend;
+  }, [computedThisMonthSpend, dashboardStats?.thisMonthSpend]);
+
+  const thisMonthReceiptCount = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+
+    return receipts.filter((r) => {
+      const d = r.date;
+      return d.getMonth() === month && d.getFullYear() === year;
+    }).length;
+  }, [receipts]);
+
+  const monthComparisonText = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    const lastMonth = month === 0 ? 11 : month - 1;
+    const lastMonthYear = month === 0 ? year - 1 : year;
+
+    const lastMonthTotal = receipts
+      .filter((r) => r.date.getMonth() === lastMonth && r.date.getFullYear() === lastMonthYear)
+      .reduce((sum, r) => sum + r.amount, 0);
+
+    if (lastMonthTotal <= 0) {
+      return 'Live data';
+    }
+
+    const diffPercent = ((thisMonthSpend - lastMonthTotal) / lastMonthTotal) * 100;
+    const trend = diffPercent >= 0 ? '↑' : '↓';
+    return `${trend} ${Math.abs(diffPercent).toFixed(0)}% vs last month`;
+  }, [receipts, thisMonthSpend]);
 
   // Stagger animations
   const card1Opacity = useSharedValue(0);
@@ -198,7 +268,7 @@ export default function HomeScreen() {
         <View style={styles.headerRow}>
           <View>
             <Text style={styles.greeting}>Good morning 👋</Text>
-            <Text style={styles.userName}>+91 98765 43210</Text>
+            <Text style={styles.userName}>{displayIdentity}</Text>
           </View>
           <Pressable onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}>
             <Animated.View style={bellStyle}>
@@ -217,14 +287,14 @@ export default function HomeScreen() {
         <GlowCard style={styles.heroCard}>
           <Text style={styles.heroLabel}>TOTAL SPENT THIS MONTH</Text>
           <MonoText style={styles.heroAmount}>
-            {formatIndianCurrency(24830)}
+            {formatIndianCurrency(thisMonthSpend)}
           </MonoText>
           <View style={styles.heroPills}>
             <View style={styles.changePill}>
-              <Text style={styles.changeText}>↑ 12% vs last month</Text>
+              <Text style={styles.changeText}>{monthComparisonText}</Text>
             </View>
             <View style={styles.countPill}>
-              <Text style={styles.countText}>47 receipts</Text>
+              <Text style={styles.countText}>{thisMonthReceiptCount} receipts</Text>
             </View>
           </View>
           {/* Mini sparkline area */}

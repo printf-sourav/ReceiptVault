@@ -1,6 +1,6 @@
 import { Worker, Job } from "bullmq";
 import { log, logError } from "../utils/logger";
-import { sendWhatsAppMessage } from "../services/whatsappSender";
+import { sendNotification } from "../services/notificationSender";
 import { supabase } from "../services/supabaseWriter";
 import { AlertJob } from "./producer";
 
@@ -35,7 +35,7 @@ async function processAlert(job: Job<AlertJob>): Promise<void> {
       : receipt?.warranty_expiry_date || "";
 
     const message = formatAlertMessage(job.data, storeName, date);
-    await sendWhatsAppMessage(userPhone, message);
+    await sendNotification(userPhone, message);
     log(`Alert fired: ${alertType} for receipt ${receiptId}`);
   } catch (error) {
     logError(`Failed to process alert job for receipt ${receiptId}`, error);

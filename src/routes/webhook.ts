@@ -4,14 +4,23 @@ import { uploadToR2 } from "../services/r2Uploader";
 import { extractReceiptData } from "../services/geminiVision";
 import { validateReceiptData } from "../validators/receiptSchema";
 import { insertReceipt } from "../services/supabaseWriter";
-import { sendWhatsAppMessage, buildConfirmationMessage } from "../services/whatsappSender";
+import { sendNotification, buildConfirmationMessage } from "../services/notificationSender";
 import { appendReceiptToIndex } from "../utils/memory";
 import { scheduleAlerts } from "../queue/producer";
 import { log, logError } from "../utils/logger";
+import { processReceiptBuffer } from "../utils/pipeline";
 
 const router = Router();
 
 const META_VERIFY_TOKEN = process.env.META_VERIFY_TOKEN!;
+
+function normalizePhone(phone: string): string {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  if (String(phone).startsWith("+")) return String(phone);
+  return `+${digits}`;
+}
 
 router.get("/whatsapp", (req: Request, res: Response): void => {
   const mode = req.query["hub.mode"] as string | undefined;
@@ -38,14 +47,14 @@ router.post("/whatsapp", (req: Request, res: Response): void => {
     }
 
     const value = entry[0].changes[0].value;
-    const sender: string = value.contacts[0].wa_id;
+    const sender: string = normalizePhone(value.contacts[0].wa_id);
     const message = value.messages[0];
 
     if (message.type !== "image") {
       if (message.type === "text" && message.text?.body?.toLowerCase() === "cancel") {
         handleCancelIntent(sender);
       } else {
-        sendWhatsAppMessage(sender, "Please send a photo of your receipt.").catch((e) =>
+        sendNotification(sender, "Please send a photo of your receipt.").catch((e) =>
           logError("Failed to send non-image reply", e)
         );
       }
@@ -63,25 +72,12 @@ router.post("/whatsapp", (req: Request, res: Response): void => {
 async function processIncomingImage(mediaId: string, senderPhone: string): Promise<void> {
   try {
     const imageBuffer = await downloadMedia(mediaId);
-    const r2Url = await uploadToR2(imageBuffer, senderPhone);
-    const rawJson = await extractReceiptData(imageBuffer);
-    const validatedData = validateReceiptData(rawJson);
-    const receiptId = await insertReceipt(validatedData, r2Url, senderPhone);
-
-    await appendReceiptToIndex({
-      date: validatedData.purchase_date || new Date().toISOString().split("T")[0],
-      store: validatedData.store_name,
-      amount: validatedData.total_amount,
-      currency: validatedData.currency,
-      id: receiptId,
-    });
-
-    await scheduleAlerts(receiptId, senderPhone, validatedData);
-    await sendWhatsAppMessage(senderPhone, buildConfirmationMessage(validatedData));
-    log(`Receipt processed successfully: ${receiptId}`);
+    const { validatedData } = await processReceiptBuffer(imageBuffer, senderPhone);
+    
+    await sendNotification(senderPhone, buildConfirmationMessage(validatedData));
   } catch (error) {
     logError("Receipt processing failed", error);
-    await sendWhatsAppMessage(
+    await sendNotification(
       senderPhone,
       "Sorry, I had trouble reading that receipt. Please try sending a clearer photo."
     ).catch(() => {});
@@ -103,7 +99,7 @@ async function handleCancelIntent(userPhone: string): Promise<void> {
     .limit(1);
 
   if (!subs || subs.length === 0) {
-    await sendWhatsAppMessage(userPhone, "No active subscription found to cancel.");
+    await sendNotification(userPhone, "No active subscription found to cancel.");
     return;
   }
 
@@ -128,7 +124,7 @@ async function handleCancelIntent(userPhone: string): Promise<void> {
     logError("Failed to log cancellation intent", e);
   }
 
-  await sendWhatsAppMessage(
+  await sendNotification(
     userPhone,
     `Got it. I've noted your intent to cancel ${sub.service_name}. Cancel directly here: ${sub.cancellation_url || "N/A"}`
   );

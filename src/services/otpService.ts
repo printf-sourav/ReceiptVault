@@ -1,4 +1,4 @@
-import { sendWhatsAppMessage } from "./whatsappSender";
+import { sendNotification } from "./notificationSender";
 import { log, logError } from "../utils/logger";
 
 // In-memory OTP store: phone -> { otp, expiresAt }
@@ -30,7 +30,7 @@ export async function sendOtp(phone: string): Promise<{ success: boolean; error?
     otpStore.set(normalized, { otp, expiresAt });
 
     const message = `🔐 *ReceiptVault* — Your verification code:\n\n*${otp}*\n\nValid for 5 minutes. Do not share this code.`;
-    await sendWhatsAppMessage(normalized, message);
+    await sendNotification(normalized, message);
 
     log(`OTP sent to ${normalized}`);
     return { success: true };

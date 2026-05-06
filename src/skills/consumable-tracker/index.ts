@@ -1,5 +1,5 @@
 import { supabase } from "../../services/supabaseWriter";
-import { sendWhatsAppMessage } from "../../services/whatsappSender";
+import { sendNotification } from "../../services/notificationSender";
 import { getUserPrefs, saveUserPatterns } from "../../utils/memory";
 import { isWithinQuietHours, canSendAlert } from "../../utils/alertHelpers";
 import { log, logError } from "../../utils/logger";
@@ -70,7 +70,7 @@ export async function runConsumableTracker(): Promise<void> {
 
           const searchUrl = `https://www.amazon.in/s?k=${encodeURIComponent(itemName)}`;
           const message = `Running low on ${itemName}? Your usual reorder is due around ${predictedNext.toISOString().split("T")[0]}. Order here: ${searchUrl}`;
-          await sendWhatsAppMessage(userPhone, message);
+          await sendNotification(userPhone, message);
           log(`Reorder alert sent: ${itemName} → ${userPhone}`);
         }
       }

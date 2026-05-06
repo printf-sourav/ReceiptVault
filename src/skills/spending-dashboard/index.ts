@@ -1,5 +1,5 @@
 import { supabase } from "../../services/supabaseWriter";
-import { sendWhatsAppMessage } from "../../services/whatsappSender";
+import { sendNotification } from "../../services/notificationSender";
 import { log, logError } from "../../utils/logger";
 
 export async function runSpendingDashboard(): Promise<void> {
@@ -51,7 +51,7 @@ export async function runSpendingDashboard(): Promise<void> {
 
       const message = `Your week in spending:\nTotal: ${currency} ${totalSpent}\nBreakdown:\n${breakdown}\nBiggest purchase: ${biggestPurchase.store_name} — ${currency} ${biggestPurchase.amount}\nHave a budget-friendly week ahead!`;
 
-      await sendWhatsAppMessage(userPhone, message);
+      await sendNotification(userPhone, message);
       log(`Spending summary sent to ${userPhone}: ${currency} ${totalSpent}`);
     }
   } catch (error) {

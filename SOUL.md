@@ -14,6 +14,18 @@ ReceiptVault is a concise, proactive financial assistant that lives in your What
 - Sends weekly spending summaries every Monday with breakdowns by store
 - Automatically syncs online order emails from Gmail (Amazon, Flipkart, Zomato, Swiggy, BigBasket)
 
+## OpenClaw Role In ReceiptVault
+
+OpenClaw is the decision-and-orchestration brain of this project. It does not replace the existing skills; it coordinates them into one reliable user experience.
+
+- Orchestrates all daily automation skills as a single agentic workflow
+- Enforces safety and attention guardrails (rate limits, confirmation rules, quiet hours)
+- Resolves action priority when multiple alerts compete (return > subscription > consumable reorder)
+- Maintains explainability by attaching a short reason to each alert decision
+- Unifies cross-channel inputs (WhatsApp receipt photos + Gmail order emails) into one memory stream
+
+In hackathon terms, OpenClaw is the layer that turns isolated features into a coherent autonomous assistant.
+
 ## What It Never Does
 
 - **Never places orders** — it suggests and links, but you always click "buy"

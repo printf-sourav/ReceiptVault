@@ -79,16 +79,6 @@ export default function LoginScreen() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     clearError();
 
-    if (isRegistrationMode) {
-      try {
-        await completeOAuthRegistration(phone);
-        router.replace('/(tabs)');
-      } catch {
-        // error is handled in the auth context
-      }
-      return;
-    }
-
     setOtpSending(true);
     const result = await sendOtpCode(phone);
     setOtpSending(false);
@@ -132,7 +122,11 @@ export default function LoginScreen() {
 
     try {
       clearError();
-      await signInWithOtp(phone, enteredOtp);
+      if (isRegistrationMode) {
+        await completeOAuthRegistration(phone, enteredOtp);
+      } else {
+        await signInWithOtp(phone, enteredOtp);
+      }
       setOtpSuccess(true);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       // Navigation will happen automatically via the provider
@@ -254,13 +248,13 @@ export default function LoginScreen() {
               <ActivityIndicator size="small" color={Colors.textPrimary} />
             ) : (
               <Text style={styles.btnText}>
-                {isRegistrationMode ? 'Complete Registration' : otpSent ? 'Resend OTP' : 'Send OTP'}
+                {otpSent ? 'Resend OTP' : 'Send OTP'}
               </Text>
             )}
           </LinearGradient>
         </Pressable>
 
-        {!isRegistrationMode && otpSent && (
+        {otpSent && (
           <Animated.View style={[styles.otpSection, otpContainerStyle]}>
             <Text style={styles.otpLabel}>Enter verification code</Text>
             <Animated.View style={[styles.otpRow, shakeStyle]}>

@@ -17,6 +17,7 @@ import {
   getUserPhone,
   clearUserData,
   registerOAuthUser,
+  getRegistrationStatus,
 } from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
 
@@ -50,6 +51,7 @@ interface AuthContextType {
   session: Session | null;
   user: User | null;
   userPhone: string | null;
+  linkedProfile: { phone: string; email: string | null; displayName: string | null } | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   isAuthenticating: boolean;
@@ -59,7 +61,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signInWithOtp: (phone: string, otp: string) => Promise<void>;
   sendOtpCode: (phone: string) => Promise<{ success: boolean; error?: string }>;
-  completeOAuthRegistration: (phone: string) => Promise<void>; // Complete OAuth + phone registration
+  completeOAuthRegistration: (phone: string, otp: string) => Promise<void>; // Complete OAuth + phone registration
   signOut: () => Promise<void>;
   clearError: () => void;
 }
@@ -68,6 +70,7 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   user: null,
   userPhone: null,
+  linkedProfile: null,
   isAuthenticated: false,
   isLoading: true,
   isAuthenticating: false,
@@ -91,11 +94,32 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [userPhone, setUserPhone] = useState<string | null>(null);
+  const [linkedProfile, setLinkedProfile] = useState<{ phone: string; email: string | null; displayName: string | null } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [pendingPhoneForOAuth, setPendingPhoneForOAuth] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const syncProfileFromSession = useCallback(async (nextSession: Session | null) => {
+    if (!nextSession?.user?.email) return;
+
+    try {
+      const { data: registration } = await getRegistrationStatus({ email: nextSession.user.email });
+      if (registration?.registered && registration?.phone) {
+        const resolvedPhone = registration.phone;
+        await saveUserPhone(resolvedPhone);
+        setUserPhone(resolvedPhone);
+        setLinkedProfile({
+          phone: resolvedPhone,
+          email: registration.email || nextSession.user.email || null,
+          displayName: registration.user?.display_name || null,
+        });
+      }
+    } catch {
+      // Non-blocking: user can still complete auth manually if lookup fails.
+    }
+  }, []);
 
   // On mount, restore any existing Supabase session and user phone
   useEffect(() => {
@@ -108,9 +132,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (sessionResult.data.session) {
           setSession(sessionResult.data.session);
+          await syncProfileFromSession(sessionResult.data.session);
         }
         if (phoneResult) {
-          setUserPhone(phoneResult);
+          try {
+            const { data: registration } = await getRegistrationStatus({ phone: phoneResult });
+            if (registration?.registered) {
+              const resolvedPhone = registration.phone || phoneResult;
+              setUserPhone(resolvedPhone);
+              setLinkedProfile({
+                phone: resolvedPhone,
+                email: registration.email || null,
+                displayName: registration.user?.display_name || null,
+              });
+            } else {
+              // Stale local phone cache after DB reset; force fresh login.
+              await clearUserData();
+              setUserPhone(null);
+              setLinkedProfile(null);
+            }
+          } catch {
+            // If lookup fails (e.g. network), keep existing local phone behavior.
+            setUserPhone(phoneResult);
+          }
         }
       } catch (err) {
         console.error('Auth init error:', err);
@@ -124,11 +168,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
         setSession(newSession);
+        syncProfileFromSession(newSession);
       },
     );
 
     return () => subscription?.unsubscribe();
-  }, []);
+  }, [syncProfileFromSession]);
 
   // ============================================================
   // OTP FLOW
@@ -170,6 +215,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const canonicalPhone = data?.user?.phone || phone;
           await saveUserPhone(canonicalPhone);
           setUserPhone(canonicalPhone);
+          setLinkedProfile({
+            phone: canonicalPhone,
+            email: data?.user?.email || null,
+            displayName: data?.user?.display_name || null,
+          });
         } else {
           throw new Error(data.error || 'OTP verification failed');
         }
@@ -202,6 +252,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         options: {
           redirectTo: redirectUri,
           skipBrowserRedirect: true,
+          scopes: 'https://www.googleapis.com/auth/gmail.readonly',
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         },
       });
 
@@ -248,7 +303,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // New OAuth users must provide a phone number to complete signup
   // ============================================================
   const completeOAuthRegistration = useCallback(
-    async (phone: string) => {
+    async (phone: string, otp: string) => {
       try {
         setError(null);
         setIsRegistering(true);
@@ -272,10 +327,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email,
           displayName,
           emailVerified: isEmailVerified(session.user),
+          otp,
         });
 
         await saveUserPhone(data?.user?.phone || phone);
         setUserPhone(data?.user?.phone || phone);
+        setLinkedProfile({
+          phone: data?.user?.phone || phone,
+          email: data?.user?.email || email,
+          displayName: data?.user?.display_name || displayName || null,
+        });
         setPendingPhoneForOAuth(null);
 
         // User is now fully registered
@@ -294,6 +355,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await clearUserData();
       setUserPhone(null);
+      setLinkedProfile(null);
       const { error: signOutError } = await supabase.auth.signOut();
       if (signOutError) {
         setError('Failed to sign out. Please try again.');
@@ -314,6 +376,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         session,
         user,
         userPhone,
+        linkedProfile,
         isAuthenticated,
         isLoading,
         isAuthenticating,

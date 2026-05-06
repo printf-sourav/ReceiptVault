@@ -1,12 +1,23 @@
 import axios from "axios";
 import { log, logError } from "../utils/logger";
 import { ValidatedReceipt } from "../validators/receiptSchema";
+import { getUserPrefs } from "../utils/memory";
 
 const META_ACCESS_TOKEN = process.env.META_ACCESS_TOKEN!;
 const META_PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID!;
 
-export async function sendWhatsAppMessage(toPhone: string, messageText: string): Promise<void> {
+export async function sendNotification(toPhone: string, messageText: string): Promise<void> {
   try {
+    const prefs = await getUserPrefs(toPhone);
+
+    if (prefs.preferred_platform === "mobile_app") {
+      log(`[Mobile App] Push notification to ${toPhone}: ${messageText.slice(0, 50)}`);
+      // Here we would integrate FCM or APNS, or simply rely on the mobile app
+      // fetching from a new /api/notifications endpoint.
+      return;
+    }
+
+    // Default to WhatsApp
     await axios.post(
       `https://graph.facebook.com/v19.0/${META_PHONE_NUMBER_ID}/messages`,
       {
@@ -24,7 +35,7 @@ export async function sendWhatsAppMessage(toPhone: string, messageText: string):
     );
     log(`Sent WhatsApp message to ${toPhone}: ${messageText.slice(0, 50)}`);
   } catch (error) {
-    logError(`Failed to send WhatsApp message to ${toPhone}`, error);
+    logError(`Failed to send notification to ${toPhone}`, error);
     throw error;
   }
 }

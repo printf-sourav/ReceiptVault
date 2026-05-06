@@ -38,7 +38,7 @@ interface SettingSection {
 }
 
 export default function SettingsScreen() {
-  const { user, signOut } = useAuth();
+  const { user, userPhone, linkedProfile, signOut } = useAuth();
   const [isSigningOut, setIsSigningOut] = useState(false);
 
   const [deadlineAlerts, setDeadlineAlerts] = useState(true);
@@ -61,8 +61,9 @@ export default function SettingsScreen() {
   };
 
   // Supabase stores Google profile data in user_metadata
-  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || null;
-  const email = user?.email || null;
+  const displayName = user?.user_metadata?.full_name || user?.user_metadata?.name || linkedProfile?.displayName || null;
+  const email = user?.email || linkedProfile?.email || null;
+  const phone = userPhone || linkedProfile?.phone || null;
   const photoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
 
   const initials = displayName
@@ -79,8 +80,8 @@ export default function SettingsScreen() {
       title: 'Profile',
       items: [
         {
-          label: email || 'Not signed in',
-          badge: user ? 'Google ✓' : undefined,
+          label: email || phone || 'Not signed in',
+          badge: user ? 'Google ✓' : phone ? 'Phone ✓' : undefined,
           badgeColor: Colors.accentEmerald,
         },
         {
@@ -168,7 +169,8 @@ export default function SettingsScreen() {
       title: 'About',
       items: [
         { label: 'ReceiptVault v1.0.0', value: '' },
-        { label: 'Built for Samsung PRISM Hackathon 2026', value: '' },
+        { label: 'Built for OpenClaw Hackathon 2026', value: '' },
+        { label: 'OpenClaw Agent Orchestration Layer', value: '' },
         {
           label: 'Powered by Gemini 2.0 Flash ✦',
           labelColor: Colors.accentPurple,
@@ -198,7 +200,7 @@ export default function SettingsScreen() {
         </View>
 
         {/* User profile card — shows Google account details */}
-        {user && (
+        {(user || linkedProfile) && (
           <View style={styles.profileCard}>
             {photoUrl ? (
               <Image source={{ uri: photoUrl }} style={styles.profilePhoto} />
@@ -212,7 +214,7 @@ export default function SettingsScreen() {
                 {displayName || 'ReceiptVault User'}
               </Text>
               <Text style={styles.profileEmail} numberOfLines={1}>
-                {email}
+                {email || phone || 'No account linked'}
               </Text>
             </View>
           </View>

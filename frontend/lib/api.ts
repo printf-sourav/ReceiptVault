@@ -58,7 +58,7 @@ export const getGoogleOAuthUrl = () =>
 export const getRegistrationStatus = (payload: { email?: string; phone?: string }) =>
   api.post('/auth/registration-status', payload);
 
-export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string; emailVerified: boolean }) =>
+export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string; emailVerified: boolean; otp?: string }) =>
   api.post('/auth/register-oauth', payload);
 
 // Receipt endpoints

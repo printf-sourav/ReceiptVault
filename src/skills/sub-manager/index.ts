@@ -1,5 +1,5 @@
 import { supabase } from "../../services/supabaseWriter";
-import { sendWhatsAppMessage } from "../../services/whatsappSender";
+import { sendNotification } from "../../services/notificationSender";
 import { getUserPrefs } from "../../utils/memory";
 import { isWithinQuietHours, canSendAlert } from "../../utils/alertHelpers";
 import { log, logError } from "../../utils/logger";
@@ -34,7 +34,7 @@ export async function runSubscriptionManager(): Promise<void> {
       if (!canSendAlert(sub.user_phone, prefs.max_alerts_per_hour)) continue;
 
       const message = `${sub.service_name} renews on ${sub.renewal_date} for ${sub.currency} ${sub.renewal_amount}.\nReply KEEP to continue or CANCEL to record cancellation intent.`;
-      await sendWhatsAppMessage(sub.user_phone, message);
+      await sendNotification(sub.user_phone, message);
       log(`Subscription alert sent: ${sub.service_name} → ${sub.user_phone}`);
     }
   } catch (error) {

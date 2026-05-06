@@ -23,18 +23,6 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
     }
 
     const canonicalPhone = normalizePhone(phone);
-    const { data: existingUsers } = await supabase
-      .from("users")
-      .select("id, phone")
-      .in("phone", getPhoneVariants(phone))
-      .limit(1);
-
-    if (!existingUsers || existingUsers.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "Phone number is not registered. Use Google sign-in first to register.",
-      });
-    }
 
     const result = await sendOtp(canonicalPhone);
     if (result.success) {
@@ -62,21 +50,29 @@ router.post("/auth/verify-otp", async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: result.error });
     }
 
-    // OTP valid — only allow already registered users
+    // OTP valid — find user or create one
     const { data: users } = await supabase
       .from("users")
-      .select("id, phone, created_at")
+      .select("id, phone, email, display_name, created_at")
       .in("phone", getPhoneVariants(phone))
       .order("created_at", { ascending: false })
       .limit(1);
 
-    const user = users?.[0];
+    let user = users?.[0];
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        error: "Phone number is not registered. Use Google sign-in first to register.",
-      });
+      const { data: newUser, error } = await supabase
+        .from("users")
+        .insert({
+          phone: canonicalPhone,
+          last_active_at: new Date().toISOString(),
+        })
+        .select("id, phone, email, display_name, created_at")
+        .single();
+        
+      if (error) throw error;
+      user = newUser;
+      return res.json({ success: true, user, isNew: true });
     }
 
     res.json({ success: true, user, isNew: false });
@@ -124,7 +120,7 @@ router.post("/auth/registration-status", async (req: Request, res: Response) => 
 // POST /api/auth/register-oauth — links a Google user to a phone number
 router.post("/auth/register-oauth", async (req: Request, res: Response) => {
   try {
-    const { phone, email, displayName, emailVerified } = req.body;
+    const { phone, email, displayName, emailVerified, otp } = req.body;
 
     if (!phone || !email) {
       return res.status(400).json({ error: "Phone and email are required" });
@@ -135,6 +131,15 @@ router.post("/auth/register-oauth", async (req: Request, res: Response) => {
     }
 
     const canonicalPhone = normalizePhone(phone);
+
+    // OTP is optional for OAuth completion flow.
+    // If provided, validate it. If not provided, proceed with trusted OAuth session + email verification.
+    if (otp) {
+      const otpResult = verifyOtp(canonicalPhone, otp);
+      if (!otpResult.valid) {
+        return res.status(401).json({ error: otpResult.error });
+      }
+    }
 
     const { data: existingByPhoneRows } = await supabase
       .from("users")
@@ -392,19 +397,29 @@ router.get("/analytics/spending", async (req: Request, res: Response) => {
     let grouped: Record<string, number> = {};
 
     if (period === "week") {
-      // Group by day of week
+      // Group by day of week for the last 7 days
       const daysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-      daysOfWeek.forEach((day) => (grouped[day] = 0));
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        grouped[daysOfWeek[d.getDay()]] = 0;
+      }
+
+      const sevenDaysAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+      sevenDaysAgo.setHours(0, 0, 0, 0);
 
       receipts.forEach((r: any) => {
         const date = new Date(r.purchase_date);
-        const dayOfWeek = daysOfWeek[date.getDay()];
-        grouped[dayOfWeek] += r.total_amount || 0;
+        if (date >= sevenDaysAgo && date <= now) {
+          const dayOfWeek = daysOfWeek[date.getDay()];
+          if (grouped[dayOfWeek] !== undefined) {
+            grouped[dayOfWeek] += r.total_amount || 0;
+          }
+        }
       });
 
-      const result = Object.entries(grouped).map(([day, amount]) => ({
+      const result = Object.keys(grouped).map((day) => ({
         day,
-        amount: Math.round(amount),
+        amount: Math.round(grouped[day]),
       }));
       return res.json(result);
     }
@@ -412,48 +427,60 @@ router.get("/analytics/spending", async (req: Request, res: Response) => {
     if (period === "month") {
       // Group by month (last 6 months)
       const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      for (let i = 0; i < 6; i++) {
+      const bucketKeys: string[] = [];
+      for (let i = 5; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        grouped[months[date.getMonth()]] = 0;
+        const key = `${months[date.getMonth()]} ${date.getFullYear()}`;
+        bucketKeys.push(key);
+        grouped[key] = 0;
       }
 
+      const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+      
       receipts.forEach((r: any) => {
         const date = new Date(r.purchase_date);
-        const month = months[date.getMonth()];
-        grouped[month] += r.total_amount || 0;
+        if (date >= sixMonthsAgo && date <= now) {
+          const key = `${months[date.getMonth()]} ${date.getFullYear()}`;
+          if (grouped[key] !== undefined) {
+            grouped[key] += r.total_amount || 0;
+          }
+        }
       });
 
-      const result = Object.keys(grouped)
-        .reverse()
-        .map((month) => ({
-          month,
-          amount: Math.round(grouped[month]),
-        }));
+      const result = bucketKeys.map((key) => ({
+        month: key.split(' ')[0], // Frontend might just expect the month name
+        amount: Math.round(grouped[key]),
+      }));
       return res.json(result);
     }
 
     if (period === "year") {
-      // Group by month for last year
+      // Group by month for last 12 months
       const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      for (let i = 0; i < 12; i++) {
+      const bucketKeys: string[] = [];
+      for (let i = 11; i >= 0; i--) {
         const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        grouped[months[date.getMonth()]] = 0;
+        const key = `${months[date.getMonth()]} ${date.getFullYear()}`;
+        bucketKeys.push(key);
+        grouped[key] = 0;
       }
+
+      const twelveMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 11, 1);
 
       receipts.forEach((r: any) => {
         const date = new Date(r.purchase_date);
-        if (date.getFullYear() === now.getFullYear() || date.getFullYear() === now.getFullYear() - 1) {
-          const month = months[date.getMonth()];
-          grouped[month] += r.total_amount || 0;
+        if (date >= twelveMonthsAgo && date <= now) {
+          const key = `${months[date.getMonth()]} ${date.getFullYear()}`;
+          if (grouped[key] !== undefined) {
+            grouped[key] += r.total_amount || 0;
+          }
         }
       });
 
-      const result = Object.keys(grouped)
-        .reverse()
-        .map((month) => ({
-          month,
-          amount: Math.round(grouped[month]),
-        }));
+      const result = bucketKeys.map((key) => ({
+        month: key.split(' ')[0],
+        amount: Math.round(grouped[key]),
+      }));
       return res.json(result);
     }
 
@@ -627,6 +654,7 @@ function mapReceipt(receipt: any) {
     item: receipt.receipt_items?.[0]?.name || "Receipt",
     amount: receipt.total_amount,
     date: receipt.purchase_date,
+    createdAt: receipt.created_at,
     category: guessCategory(receipt.store_name, receipt.receipt_items || []),
     paymentMode: "Unknown",
     returnDeadline: receipt.return_deadline_date,

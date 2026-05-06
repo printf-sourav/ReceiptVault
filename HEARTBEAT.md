@@ -2,6 +2,8 @@
 
 ReceiptVault runs a background process every morning at 8:00 AM IST. It checks your receipts, predicts what you need, monitors your subscriptions, and scans your email — all so you never miss a return deadline, overpay for a forgotten subscription, or run out of essentials. Here is exactly what it does each morning.
 
+OpenClaw is the orchestration layer behind this heartbeat. It schedules each skill, applies safety rules, and ensures alerts remain concise, timely, and non-spammy.
+
 ## 8:00 AM — Deadline Watch
 
 Every morning, ReceiptVault queries all stored receipts looking for items with return windows closing within the next 1, 3, or 7 days. For each match, it sends you a WhatsApp message like: "Return window for your Croma purchase closes in 3 days — 2026-05-10. Act now if you want to return it." It never sends duplicate reminders for the same receipt on the same day, and it respects your quiet hours so you won't be woken up by an alert at midnight.

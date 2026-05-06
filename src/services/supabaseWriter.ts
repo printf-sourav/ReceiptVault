@@ -7,6 +7,14 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+function normalizePhone(phone: string): string {
+  const digits = String(phone || "").replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  if (String(phone).startsWith("+")) return String(phone);
+  return `+${digits}`;
+}
+
 function addDays(dateStr: string, days: number): string {
   const date = new Date(dateStr);
   date.setDate(date.getDate() + days);
@@ -14,10 +22,12 @@ function addDays(dateStr: string, days: number): string {
 }
 
 export async function getOrCreateUser(userPhone: string): Promise<string> {
+  const canonicalPhone = normalizePhone(userPhone);
+
   const { data: user } = await supabase
     .from("users")
     .select("id")
-    .eq("phone", userPhone)
+    .eq("phone", canonicalPhone)
     .single();
 
   if (user) {
@@ -26,7 +36,7 @@ export async function getOrCreateUser(userPhone: string): Promise<string> {
 
   const { data: newUser, error: insertError } = await supabase
     .from("users")
-    .insert({ phone: userPhone })
+    .insert({ phone: canonicalPhone })
     .select("id")
     .single();
 
@@ -43,7 +53,8 @@ export async function insertReceipt(
   r2Url: string,
   userPhone: string
 ): Promise<string> {
-  const userId = await getOrCreateUser(userPhone);
+  const canonicalPhone = normalizePhone(userPhone);
+  const userId = await getOrCreateUser(canonicalPhone);
   const purchaseDate = data.purchase_date || new Date().toISOString().split("T")[0];
 
   const returnDeadlineDate = data.return_deadline_days !== null
@@ -58,7 +69,7 @@ export async function insertReceipt(
     .from("receipts")
     .insert({
       user_id: userId,
-      user_phone: userPhone,
+      user_phone: canonicalPhone,
       store_name: data.store_name,
       purchase_date: purchaseDate,
       total_amount: data.total_amount,
@@ -101,6 +112,6 @@ export async function insertReceipt(
     }
   }
 
-  log(`Inserted receipt ${newReceiptId} for ${userPhone}`);
+  log(`Inserted receipt ${newReceiptId} for ${canonicalPhone}`);
   return newReceiptId;
 }

@@ -11,6 +11,7 @@ export interface Receipt {
   item: string;
   amount: number;
   date: Date;
+  createdAt?: Date | null;
   category: 'Electronics' | 'Food' | 'Fashion' | 'Groceries' | 'Health' | 'Other';
   paymentMode: string;
   returnDeadline: Date | null;
@@ -91,6 +92,7 @@ export const useData = () => {
       const parsedReceipts = (receiptsRes.data || []).map((r: any) => ({
         ...r,
         date: new Date(r.date),
+        createdAt: r.createdAt ? new Date(r.createdAt) : null,
         returnDeadline: r.returnDeadline ? new Date(r.returnDeadline) : null,
         warrantyExpiry: r.warrantyExpiry ? new Date(r.warrantyExpiry) : null,
       }));
