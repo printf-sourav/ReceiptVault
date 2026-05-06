@@ -7,13 +7,16 @@ import React, {
 } from 'react';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
 import { sendOtp, verifyOtp, saveUserPhone, getUserPhone, clearUserData } from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Ensures the browser auth popup closes and redirects back properly
-WebBrowser.maybeCompleteAuthSession();
+if (Platform.OS !== 'web') {
+  WebBrowser.maybeCompleteAuthSession();
+}
 
 const OTP_AUTH_KEY = 'receiptvault_otp_auth';
 const PHONE_KEY = 'receiptvault_user_phone';
@@ -22,10 +25,16 @@ const PHONE_KEY = 'receiptvault_user_phone';
 // REDIRECT URI
 // Tells OAuth where to send the user after Google login.
 // ============================================================
-const redirectUri = makeRedirectUri({
-  scheme: 'receiptvault',
-  path: 'auth/callback',
-});
+function getRedirectUri() {
+  if (Platform.OS === 'web') {
+    return `${window.location.origin}/auth/callback`;
+  }
+
+  return makeRedirectUri({
+    scheme: 'receiptvault',
+    path: 'auth/callback',
+  });
+}
 
 // ============================================================
 // AUTH CONTEXT TYPES
@@ -164,18 +173,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       setError(null);
       setIsAuthenticating(true);
+      const redirectUri = getRedirectUri();
 
       // Use Supabase's built-in OAuth method for Google
       const { data, error: supabaseError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: redirectUri,
-          skipBrowserRedirect: false,
+          skipBrowserRedirect: true,
         },
       });
 
       if (supabaseError) {
         throw supabaseError;
+      }
+
+      if (Platform.OS === 'web') {
+        if (data.url) {
+          console.log('Redirecting to Google OAuth URL:', data.url);
+          window.location.href = data.url;
+        }
+        return;
       }
 
       // On native platforms, opening the URL in browser handles the redirect automatically
