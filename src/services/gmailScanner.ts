@@ -11,7 +11,7 @@ import { log, logError } from "../utils/logger";
 const CREDENTIALS_PATH = path.resolve(__dirname, "../../credentials.json");
 const TOKEN_PATH = path.resolve(__dirname, "../../token.json");
 const PROCESSED_PATH = path.resolve(__dirname, "../../.gmail-processed.json");
-const ADMIN_PHONE = process.env.ADMIN_PHONE || "";
+const ADMIN_PHONE = process.env.ADMIN_PHONE;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
@@ -125,6 +125,14 @@ function extractTextFromPayload(payload: any): string {
 
 export async function scanGmail(): Promise<void> {
   try {
+    if (!ADMIN_PHONE) {
+      logError(
+        "[gmail-scanner] ADMIN_PHONE is not set in .env — skipping Gmail scan. " +
+        "Set it to the WhatsApp number linked to the Gmail account."
+      );
+      return;
+    }
+
     await fs.access(CREDENTIALS_PATH);
   } catch {
     log("Gmail scanner skipped: credentials.json not found. Place your OAuth credentials file at project root.");
@@ -153,7 +161,7 @@ export async function scanGmail(): Promise<void> {
 
     const processedIds = await getProcessedIds();
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     for (const msg of messages) {
       if (!msg.id || processedIds.has(msg.id)) continue;

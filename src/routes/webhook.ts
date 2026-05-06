@@ -8,6 +8,10 @@ import { sendWhatsAppMessage, buildConfirmationMessage } from "../services/whats
 import { appendReceiptToIndex } from "../utils/memory";
 import { scheduleAlerts } from "../queue/producer";
 import { log, logError } from "../utils/logger";
+import * as fs from "fs/promises";
+import * as path from "path";
+import { supabase } from "../services/supabaseWriter";
+import { saveUserPrefs, getUserPrefs } from "../utils/memory";
 
 const router = Router();
 
@@ -89,11 +93,6 @@ async function processIncomingImage(mediaId: string, senderPhone: string): Promi
 }
 
 async function handleCancelIntent(userPhone: string): Promise<void> {
-  const { supabase } = await import("../services/supabaseWriter");
-  const { saveUserPrefs, getUserPrefs } = await import("../utils/memory");
-  const fs = await import("fs/promises");
-  const path = await import("path");
-
   const { data: subs } = await supabase
     .from("subscriptions")
     .select("*")
@@ -103,7 +102,10 @@ async function handleCancelIntent(userPhone: string): Promise<void> {
     .limit(1);
 
   if (!subs || subs.length === 0) {
-    await sendWhatsAppMessage(userPhone, "No active subscription found to cancel.");
+    await sendWhatsAppMessage(
+      userPhone,
+      "No active subscription found to cancel."
+    );
     return;
   }
 
@@ -111,26 +113,39 @@ async function handleCancelIntent(userPhone: string): Promise<void> {
   const prefs = await getUserPrefs(userPhone);
   await saveUserPrefs(userPhone, {
     ...prefs,
-    auto_actions_approved: [...prefs.auto_actions_approved, `cancel_intent:${sub.service_name}`],
+    auto_actions_approved: [
+      ...prefs.auto_actions_approved,
+      `cancel_intent:${sub.service_name}`,
+    ],
   });
 
-  const logPath = path.resolve(__dirname, "../../logs/cancellation-intents.json");
+  const logDir = path.resolve(process.cwd(), "logs");
+  const logFilePath = path.join(logDir, "cancellation-intents.json");
   try {
-    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await fs.mkdir(logDir, { recursive: true });
     let existing: unknown[] = [];
     try {
-      const content = await fs.readFile(logPath, "utf-8");
+      const content = await fs.readFile(logFilePath, "utf-8");
       existing = JSON.parse(content);
     } catch {}
-    existing.push({ userPhone, service_name: sub.service_name, timestamp: new Date().toISOString() });
-    await fs.writeFile(logPath, JSON.stringify(existing, null, 2), "utf-8");
+    existing.push({
+      userPhone,
+      service_name: sub.service_name,
+      timestamp: new Date().toISOString(),
+    });
+    await fs.writeFile(
+      logFilePath,
+      JSON.stringify(existing, null, 2),
+      "utf-8"
+    );
   } catch (e) {
     logError("Failed to log cancellation intent", e);
   }
 
   await sendWhatsAppMessage(
     userPhone,
-    `Got it. I've noted your intent to cancel ${sub.service_name}. Cancel directly here: ${sub.cancellation_url || "N/A"}`
+    `Got it. I've noted your intent to cancel ${sub.service_name}.\n` +
+      `Cancel directly here: ${sub.cancellation_url || "N/A"}`
   );
 }
 

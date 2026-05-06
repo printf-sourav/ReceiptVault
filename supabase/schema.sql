@@ -166,3 +166,50 @@ create policy "allow_all_price_history" on price_history   for all using (true) 
 insert into users (phone, display_name)
 values ('910000000000', 'Test User')
 on conflict (phone) do nothing;
+
+-- ================================================================
+-- PGVECTOR: Semantic search on receipts
+-- Requires pgvector extension enabled in Supabase Settings → Extensions
+-- ================================================================
+
+-- Step 1: Enable the extension (run once in Supabase dashboard if not done)
+-- create extension if not exists vector;
+
+-- Step 2: Add embedding column to receipts
+alter table receipts
+add column if not exists embedding vector(768);
+
+-- Step 3: Index for fast cosine similarity search
+create index if not exists idx_receipts_embedding
+on receipts using ivfflat (embedding vector_cosine_ops)
+with (lists = 100);
+
+-- Step 4: RPC function used by semanticSearchReceipts()
+create or replace function match_receipts(
+  query_embedding vector(768),
+  match_user_phone text,
+  match_count int default 5
+)
+returns table (
+  id uuid,
+  store_name text,
+  total_amount numeric,
+  purchase_date date,
+  return_deadline_date date,
+  similarity float
+)
+language sql stable
+as $$
+  select
+    r.id,
+    r.store_name,
+    r.total_amount,
+    r.purchase_date,
+    r.return_deadline_date,
+    1 - (r.embedding <=> query_embedding) as similarity
+  from receipts r
+  where r.user_phone = match_user_phone
+    and r.embedding is not null
+  order by r.embedding <=> query_embedding
+  limit match_count;
+$$;

@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { log, logError } from "../utils/logger";
 import { ValidatedReceipt } from "../validators/receiptSchema";
+import { embedAndStoreReceipt } from "./embeddings";
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
@@ -102,5 +103,18 @@ export async function insertReceipt(
   }
 
   log(`Inserted receipt ${newReceiptId} for ${userPhone}`);
+
+  // Generate and store semantic embedding asynchronously.
+  // Fire-and-forget: embedding failure never crashes the receipt pipeline.
+  embedAndStoreReceipt({
+    receiptId: newReceiptId,
+    storeName: data.store_name,
+    items: data.items.map((i) => i.name),
+    totalAmount: data.total_amount,
+    purchaseDate: data.purchase_date ?? undefined,
+  }).catch((err) =>
+    logError("Embedding failed for receipt " + newReceiptId, err)
+  );
+
   return newReceiptId;
 }
