@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+import { getRegistrationStatus, saveUserPhone } from '../../lib/api';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 
@@ -48,9 +49,22 @@ export default function AuthCallbackScreen() {
             console.log('Session set successfully from OAuth token');
             const { data } = await supabase.auth.getSession();
             if (data.session) {
-              console.log('Session confirmed, navigating to app');
-              router.replace('/(tabs)');
-              return;
+              const email = data.session.user.email;
+              if (email) {
+                const statusResponse = await getRegistrationStatus({ email });
+                const registration = statusResponse.data;
+
+                if (registration?.registered && registration?.phone) {
+                  await saveUserPhone(registration.phone);
+                  console.log('Registered OAuth user found, navigating to app');
+                  router.replace('/(tabs)');
+                  return;
+                }
+
+                console.log('OAuth user is not registered yet, sending to login completion');
+                router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
+                return;
+              }
             }
           }
         }
@@ -87,9 +101,22 @@ export default function AuthCallbackScreen() {
 
         const { data } = await supabase.auth.getSession();
         if (data.session) {
-          console.log('Session confirmed, navigating to app');
-          router.replace('/(tabs)');
-          return;
+          const email = data.session.user.email;
+          if (email) {
+            const statusResponse = await getRegistrationStatus({ email });
+            const registration = statusResponse.data;
+
+            if (registration?.registered && registration?.phone) {
+              await saveUserPhone(registration.phone);
+              console.log('Registered OAuth user found, navigating to app');
+              router.replace('/(tabs)');
+              return;
+            }
+
+            console.log('OAuth user is not registered yet, sending to login completion');
+            router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
+            return;
+          }
         }
 
         const msg = 'No session found after exchange';

@@ -8,9 +8,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Image,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
   useSharedValue,
@@ -29,7 +28,9 @@ import { useAuth } from '../context/AuthContext';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { signInWithGoogle, signInWithOtp, sendOtpCode, isAuthenticating, error, clearError } = useAuth();
+  const params = useLocalSearchParams<{ mode?: string; email?: string }>();
+  const isRegistrationMode = params.mode === 'register';
+  const { signInWithGoogle, signInWithOtp, sendOtpCode, completeOAuthRegistration, isAuthenticating, isRegistering, error, clearError } = useAuth();
 
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -77,7 +78,17 @@ export default function LoginScreen() {
     if (phone.length < 10) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     clearError();
-    
+
+    if (isRegistrationMode) {
+      try {
+        await completeOAuthRegistration(phone);
+        router.replace('/(tabs)');
+      } catch {
+        // error is handled in the auth context
+      }
+      return;
+    }
+
     setOtpSending(true);
     const result = await sendOtpCode(phone);
     setOtpSending(false);
@@ -160,7 +171,16 @@ export default function LoginScreen() {
       >
         <View style={styles.header}>
           <Text style={styles.title}>Access Your Vault</Text>
-          <Text style={styles.subtitle}>Enter your number to continue</Text>
+          <Text style={styles.subtitle}>
+            {isRegistrationMode
+              ? 'Complete registration with your phone number'
+              : 'Sign in with Google or phone number'}
+          </Text>
+          <Text style={styles.infoText}>
+            {isRegistrationMode
+              ? 'Google sign-in is already done. Add your phone to finish registration.'
+              : 'New users: Google login + phone required'}
+          </Text>
         </View>
 
         {/* ── Google Sign-In Button ── */}
@@ -180,7 +200,7 @@ export default function LoginScreen() {
               <Text style={styles.googleIcon}>G</Text>
             )}
             <Text style={styles.googleBtnText}>
-              {isAuthenticating ? 'Signing in…' : 'Continue with Google'}
+              {isAuthenticating ? 'Signing in…' : isRegistrationMode ? 'Google already linked' : 'Continue with Google'}
             </Text>
           </Pressable>
 
@@ -217,11 +237,11 @@ export default function LoginScreen() {
 
         <Pressable
           onPress={handleSendOtp}
-          disabled={otpSending || isAuthenticating}
+          disabled={otpSending || isAuthenticating || isRegistering}
           style={({ pressed }) => [
             { transform: [{ scale: pressed ? 0.97 : 1 }] },
             styles.sendBtn,
-            (otpSending || isAuthenticating) && styles.btnDisabled,
+            (otpSending || isAuthenticating || isRegistering) && styles.btnDisabled,
           ]}
         >
           <LinearGradient
@@ -230,17 +250,17 @@ export default function LoginScreen() {
             end={{ x: 1, y: 0 }}
             style={styles.gradientBtn}
           >
-            {otpSending ? (
+            {otpSending || isRegistering ? (
               <ActivityIndicator size="small" color={Colors.textPrimary} />
             ) : (
               <Text style={styles.btnText}>
-                {otpSent ? 'Resend OTP' : 'Send OTP'}
+                {isRegistrationMode ? 'Complete Registration' : otpSent ? 'Resend OTP' : 'Send OTP'}
               </Text>
             )}
           </LinearGradient>
         </Pressable>
 
-        {otpSent && (
+        {!isRegistrationMode && otpSent && (
           <Animated.View style={[styles.otpSection, otpContainerStyle]}>
             <Text style={styles.otpLabel}>Enter verification code</Text>
             <Animated.View style={[styles.otpRow, shakeStyle]}>
@@ -326,6 +346,12 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.bodyRegular,
     fontSize: FontSizes.sm + 1,
     color: Colors.textSecondary,
+  },
+  infoText: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.xs,
+    color: Colors.textMuted,
+    marginTop: 8,
   },
 
   // Google Sign-In

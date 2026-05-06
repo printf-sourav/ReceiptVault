@@ -47,6 +47,12 @@ export const getOAuthConfig = () =>
 export const getGoogleOAuthUrl = () =>
   axios.get(`${BASE_URL}/api/auth/google-url`);
 
+export const getRegistrationStatus = (payload: { email?: string; phone?: string }) =>
+  api.post('/auth/registration-status', payload);
+
+export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string }) =>
+  api.post('/auth/register-oauth', payload);
+
 // Receipt endpoints
 export const uploadReceipt = async (fileOrUri: File | string) => {
   const formData = new FormData();

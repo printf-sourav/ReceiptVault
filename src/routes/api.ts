@@ -21,6 +21,23 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
     if (!phone || phone.length < 10) {
       return res.status(400).json({ error: "Valid phone number required" });
     }
+
+    const normalized = phone.replace(/[\s\-\+]/g, "");
+    const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
+
+    const { data: existingUser } = await supabase
+      .from("users")
+      .select("id")
+      .eq("phone", fullPhone)
+      .single();
+
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        error: "Phone number is not registered. Use Google sign-in first to register.",
+      });
+    }
+
     const result = await sendOtp(phone);
     if (result.success) {
       res.json({ success: true, message: "OTP sent to your WhatsApp" });
@@ -33,7 +50,7 @@ router.post("/auth/send-otp", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/auth/verify-otp — verifies OTP and creates/returns user
+// POST /api/auth/verify-otp — verifies OTP for existing users only
 router.post("/auth/verify-otp", async (req: Request, res: Response) => {
   try {
     const { phone, otp } = req.body;
@@ -46,7 +63,7 @@ router.post("/auth/verify-otp", async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: result.error });
     }
 
-    // OTP valid — get or create user
+    // OTP valid — only allow already registered users
     const normalized = phone.replace(/[\s\-\+]/g, "");
     const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
 
@@ -56,20 +73,129 @@ router.post("/auth/verify-otp", async (req: Request, res: Response) => {
       .eq("phone", fullPhone)
       .single();
 
-    if (user) {
-      return res.json({ success: true, user, isNew: false });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: "Phone number is not registered. Use Google sign-in first to register.",
+      });
+    }
+
+    res.json({ success: true, user, isNew: false });
+  } catch (e: any) {
+    logError("API /auth/verify-otp error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/auth/registration-status — checks whether an OAuth user is already linked to a phone
+router.post("/auth/registration-status", async (req: Request, res: Response) => {
+  try {
+    const { email, phone } = req.body;
+
+    if (!email && !phone) {
+      return res.status(400).json({ error: "Email or phone required" });
+    }
+
+    let query = supabase.from("users").select("id, phone, display_name, email");
+
+    if (email) {
+      query = query.eq("email", email).limit(1);
+    } else if (phone) {
+      const normalized = phone.replace(/[\s\-\+]/g, "");
+      const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
+      query = query.eq("phone", fullPhone).limit(1);
+    }
+
+    const { data, error } = await query.single();
+
+    if (error || !data) {
+      return res.json({ registered: false });
+    }
+
+    res.json({
+      registered: true,
+      user: data,
+      phone: data.phone,
+      email: data.email,
+    });
+  } catch (e: any) {
+    logError("API /auth/registration-status error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/auth/register-oauth — links a Google user to a phone number
+router.post("/auth/register-oauth", async (req: Request, res: Response) => {
+  try {
+    const { phone, email, displayName } = req.body;
+
+    if (!phone || !email) {
+      return res.status(400).json({ error: "Phone and email are required" });
+    }
+
+    const normalized = phone.replace(/[\s\-\+]/g, "");
+    const fullPhone = normalized.length === 10 ? `+91${normalized}` : `+${normalized}`;
+
+    const { data: existingByPhone } = await supabase
+      .from("users")
+      .select("id, phone, email, display_name")
+      .eq("phone", fullPhone)
+      .single();
+
+    if (existingByPhone) {
+      const { data: updatedUser, error } = await supabase
+        .from("users")
+        .update({
+          email,
+          display_name: displayName || existingByPhone.display_name,
+          last_active_at: new Date().toISOString(),
+        })
+        .eq("phone", fullPhone)
+        .select("id, phone, email, display_name")
+        .single();
+
+      if (error) throw error;
+      return res.json({ success: true, user: updatedUser, isNew: false });
+    }
+
+    const { data: existingByEmail } = await supabase
+      .from("users")
+      .select("id, phone, email, display_name")
+      .eq("email", email)
+      .single();
+
+    if (existingByEmail) {
+      const { data: updatedUser, error } = await supabase
+        .from("users")
+        .update({
+          phone: fullPhone,
+          display_name: displayName || existingByEmail.display_name,
+          last_active_at: new Date().toISOString(),
+        })
+        .eq("email", email)
+        .select("id, phone, email, display_name")
+        .single();
+
+      if (error) throw error;
+      return res.json({ success: true, user: updatedUser, isNew: false });
     }
 
     const { data: newUser, error } = await supabase
       .from("users")
-      .insert({ phone: fullPhone })
-      .select("id, phone, created_at")
+      .insert({
+        phone: fullPhone,
+        email,
+        display_name: displayName || null,
+        last_active_at: new Date().toISOString(),
+      })
+      .select("id, phone, email, display_name")
       .single();
 
     if (error) throw error;
+
     res.json({ success: true, user: newUser, isNew: true });
   } catch (e: any) {
-    logError("API /auth/verify-otp error", e);
+    logError("API /auth/register-oauth error", e);
     res.status(500).json({ error: e.message });
   }
 });

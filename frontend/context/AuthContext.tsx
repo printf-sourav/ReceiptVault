@@ -10,7 +10,14 @@ import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from '../lib/supabase';
-import { sendOtp, verifyOtp, saveUserPhone, getUserPhone, clearUserData } from '../lib/api';
+import {
+  sendOtp,
+  verifyOtp,
+  saveUserPhone,
+  getUserPhone,
+  clearUserData,
+  registerOAuthUser,
+} from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
 
 // Ensures the browser auth popup closes and redirects back properly
@@ -46,10 +53,13 @@ interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
   isAuthenticating: boolean;
+  isRegistering: boolean;
+  pendingPhoneForOAuth: string | null; // OAuth user waiting for phone
   error: string | null;
   signInWithGoogle: () => Promise<void>;
   signInWithOtp: (phone: string, otp: string) => Promise<void>;
   sendOtpCode: (phone: string) => Promise<{ success: boolean; error?: string }>;
+  completeOAuthRegistration: (phone: string) => Promise<void>; // Complete OAuth + phone registration
   signOut: () => Promise<void>;
   clearError: () => void;
 }
@@ -61,10 +71,13 @@ const AuthContext = createContext<AuthContextType>({
   isAuthenticated: false,
   isLoading: true,
   isAuthenticating: false,
+  isRegistering: false,
+  pendingPhoneForOAuth: null,
   error: null,
   signInWithGoogle: async () => {},
   signInWithOtp: async () => {},
   sendOtpCode: async () => ({ success: false }),
+  completeOAuthRegistration: async () => {},
   signOut: async () => {},
   clearError: () => {},
 });
@@ -80,6 +93,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [userPhone, setUserPhone] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [pendingPhoneForOAuth, setPendingPhoneForOAuth] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // On mount, restore any existing Supabase session and user phone
@@ -222,6 +237,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // ============================================================
+  // COMPLETE OAUTH REGISTRATION
+  // New OAuth users must provide a phone number to complete signup
+  // ============================================================
+  const completeOAuthRegistration = useCallback(
+    async (phone: string) => {
+      try {
+        setError(null);
+        setIsRegistering(true);
+
+        if (!session?.user) {
+          throw new Error('No OAuth session found');
+        }
+
+        const email = session.user.email;
+        if (!email) {
+          throw new Error('OAuth account does not include an email address');
+        }
+
+        const displayName = session.user.user_metadata?.full_name || session.user.user_metadata?.name || undefined;
+        const { data } = await registerOAuthUser({
+          phone,
+          email,
+          displayName,
+        });
+
+        await saveUserPhone(data?.user?.phone || phone);
+        setUserPhone(data?.user?.phone || phone);
+        setPendingPhoneForOAuth(null);
+
+        // User is now fully registered
+      } catch (err: any) {
+        const message = getErrorMessage(err);
+        setError(message);
+        throw err;
+      } finally {
+        setIsRegistering(false);
+      }
+    },
+    [session]
+  );
+
   const signOut = useCallback(async () => {
     try {
       await clearUserData();
@@ -238,7 +295,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearError = useCallback(() => setError(null), []);
 
   const user = session?.user ?? null;
-  const isAuthenticated = !!session || !!userPhone;
+  const isAuthenticated = !!userPhone;
 
   return (
     <AuthContext.Provider
@@ -249,10 +306,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isAuthenticated,
         isLoading,
         isAuthenticating,
+        isRegistering,
+        pendingPhoneForOAuth,
         error,
         signInWithGoogle,
         signInWithOtp,
         sendOtpCode,
+        completeOAuthRegistration,
         signOut,
         clearError,
       }}
