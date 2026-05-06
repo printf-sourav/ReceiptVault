@@ -241,6 +241,217 @@ router.get("/receipts/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ---------- GET /api/analytics/spending ----------
+router.get("/analytics/spending", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { period = "week" } = req.query;
+
+    const { data, error } = await supabase
+      .from("receipts")
+      .select("total_amount, purchase_date")
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+
+    const receipts = data || [];
+    const now = new Date();
+    let grouped: Record<string, number> = {};
+
+    if (period === "week") {
+      // Group by day of week
+      const daysOfWeek = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      daysOfWeek.forEach((day) => (grouped[day] = 0));
+
+      receipts.forEach((r: any) => {
+        const date = new Date(r.purchase_date);
+        const dayOfWeek = daysOfWeek[date.getDay()];
+        grouped[dayOfWeek] += r.total_amount || 0;
+      });
+
+      const result = Object.entries(grouped).map(([day, amount]) => ({
+        day,
+        amount: Math.round(amount),
+      }));
+      return res.json(result);
+    }
+
+    if (period === "month") {
+      // Group by month (last 6 months)
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      for (let i = 0; i < 6; i++) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        grouped[months[date.getMonth()]] = 0;
+      }
+
+      receipts.forEach((r: any) => {
+        const date = new Date(r.purchase_date);
+        const month = months[date.getMonth()];
+        grouped[month] += r.total_amount || 0;
+      });
+
+      const result = Object.keys(grouped)
+        .reverse()
+        .map((month) => ({
+          month,
+          amount: Math.round(grouped[month]),
+        }));
+      return res.json(result);
+    }
+
+    if (period === "year") {
+      // Group by month for last year
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      for (let i = 0; i < 12; i++) {
+        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        grouped[months[date.getMonth()]] = 0;
+      }
+
+      receipts.forEach((r: any) => {
+        const date = new Date(r.purchase_date);
+        if (date.getFullYear() === now.getFullYear() || date.getFullYear() === now.getFullYear() - 1) {
+          const month = months[date.getMonth()];
+          grouped[month] += r.total_amount || 0;
+        }
+      });
+
+      const result = Object.keys(grouped)
+        .reverse()
+        .map((month) => ({
+          month,
+          amount: Math.round(grouped[month]),
+        }));
+      return res.json(result);
+    }
+
+    res.json([]);
+  } catch (e: any) {
+    logError("API /analytics/spending error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/analytics/categories ----------
+router.get("/analytics/categories", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+
+    const { data, error } = await supabase
+      .from("receipts")
+      .select("store_name, total_amount, receipt_items(*)")
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+
+    const receipts = data || [];
+    const categoryMap: Record<string, { amount: number; emoji: string; color: string }> = {
+      Electronics: { amount: 0, emoji: "⚡", color: "#63B3ED" },
+      Food: { amount: 0, emoji: "🍕", color: "#F6AD55" },
+      Fashion: { amount: 0, emoji: "👗", color: "#B794F4" },
+      Groceries: { amount: 0, emoji: "🛒", color: "#68D391" },
+      Health: { amount: 0, emoji: "💊", color: "#FC8181" },
+      Other: { amount: 0, emoji: "📦", color: "#4A5568" },
+    };
+
+    receipts.forEach((r: any) => {
+      const category = guessCategory(r.store_name, r.receipt_items || []);
+      const cat = categoryMap[category] || categoryMap["Other"];
+      cat.amount += r.total_amount || 0;
+    });
+
+    const total = Object.values(categoryMap).reduce((s, c) => s + c.amount, 0);
+    const result = Object.entries(categoryMap)
+      .map(([name, data]) => ({
+        name,
+        amount: Math.round(data.amount),
+        percent: total > 0 ? Math.round((data.amount / total) * 100) : 0,
+        emoji: data.emoji,
+        color: data.color,
+      }))
+      .filter((c) => c.amount > 0)
+      .sort((a, b) => b.amount - a.amount);
+
+    res.json(result);
+  } catch (e: any) {
+    logError("API /analytics/categories error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/analytics/top-merchants ----------
+router.get("/analytics/top-merchants", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+
+    const { data, error } = await supabase
+      .from("receipts")
+      .select("store_name, total_amount")
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+
+    const receipts = data || [];
+    const merchantMap: Record<string, number> = {};
+
+    receipts.forEach((r: any) => {
+      merchantMap[r.store_name] = (merchantMap[r.store_name] || 0) + (r.total_amount || 0);
+    });
+
+    const result = Object.entries(merchantMap)
+      .map(([store, amount], index) => ({
+        rank: index + 1,
+        store,
+        amount: Math.round(amount),
+      }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 5);
+
+    res.json(result);
+  } catch (e: any) {
+    logError("API /analytics/top-merchants error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/dashboard/stats ----------
+router.get("/dashboard/stats", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+
+    const { data, error } = await supabase
+      .from("receipts")
+      .select("return_deadline_date, warranty_expiry_date, purchase_date, total_amount")
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+
+    const receipts = data || [];
+    const now = new Date();
+    const oneWeekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const stats = {
+      totalReceipts: receipts.length,
+      returnsExpiring: receipts.filter(
+        (r: any) => r.return_deadline_date && new Date(r.return_deadline_date) <= oneWeekFromNow && new Date(r.return_deadline_date) >= now
+      ).length,
+      warrantyActive: receipts.filter(
+        (r: any) => r.warranty_expiry_date && new Date(r.warranty_expiry_date) >= now
+      ).length,
+      thisMonthSpend: Math.round(
+        receipts
+          .filter((r: any) => new Date(r.purchase_date) >= oneMonthAgo)
+          .reduce((s: number, r: any) => s + (r.total_amount || 0), 0)
+      ),
+    };
+
+    res.json(stats);
+  } catch (e: any) {
+    logError("API /dashboard/stats error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- HELPERS ----------
 function guessCategory(storeName: string, items: any[]): string {
   const name = storeName.toLowerCase();

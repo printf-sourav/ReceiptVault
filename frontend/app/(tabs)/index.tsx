@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Pressable,
   Dimensions,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,9 +29,8 @@ import { DeadlineBadge } from '../../src/components/DeadlineBadge';
 import { VaultLogo } from '../../src/components/VaultLogo';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
+import { useData } from '../../src/hooks/useData';
 import {
-  receipts,
-  spendingByWeek,
   formatIndianCurrency,
   getDaysLeft,
   formatDate,
@@ -67,26 +67,46 @@ const BellIcon = ({ color, size }: { color: string; size: number }) => (
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { receipts, spendingByWeek, dashboardStats, loading, refetch } = useData();
   const [refreshing, setRefreshing] = useState(false);
 
-  const deadlineReceipts = receipts
-    .filter((r) => r.returnDeadline && getDaysLeft(r.returnDeadline)! >= 0)
-    .sort((a, b) => getDaysLeft(a.returnDeadline)! - getDaysLeft(b.returnDeadline)!)
-    .slice(0, 3);
+  const deadlineReceipts = useMemo(
+    () =>
+      receipts
+        .filter((r) => r.returnDeadline && getDaysLeft(r.returnDeadline)! >= 0)
+        .sort((a, b) => getDaysLeft(a.returnDeadline)! - getDaysLeft(b.returnDeadline)!)
+        .slice(0, 3),
+    [receipts]
+  );
 
-  const recentReceipts = [...receipts].sort(
-    (a, b) => b.date.getTime() - a.date.getTime()
-  ).slice(0, 6);
+  const recentReceipts = useMemo(
+    () =>
+      [...receipts].sort(
+        (a, b) => b.date.getTime() - a.date.getTime()
+      ).slice(0, 6),
+    [receipts]
+  );
 
-  const expiringCount = receipts.filter(
-    (r) => r.returnDeadline && getDaysLeft(r.returnDeadline)! >= 0 && getDaysLeft(r.returnDeadline)! <= 7
-  ).length;
+  const expiringCount = useMemo(
+    () =>
+      receipts.filter(
+        (r) => r.returnDeadline && getDaysLeft(r.returnDeadline)! >= 0 && getDaysLeft(r.returnDeadline)! <= 7
+      ).length,
+    [receipts]
+  );
 
-  const protectedCount = receipts.filter(
-    (r) => r.warrantyExpiry && getDaysLeft(r.warrantyExpiry)! > 0
-  ).length;
+  const protectedCount = useMemo(
+    () =>
+      receipts.filter(
+        (r) => r.warrantyExpiry && getDaysLeft(r.warrantyExpiry)! > 0
+      ).length,
+    [receipts]
+  );
 
-  const thisWeekTotal = spendingByWeek.reduce((s, d) => s + d.amount, 0);
+  const thisWeekTotal = useMemo(
+    () => spendingByWeek.reduce((s, d) => s + d.amount, 0),
+    [spendingByWeek]
+  );
 
   // Stagger animations
   const card1Opacity = useSharedValue(0);
@@ -148,10 +168,11 @@ export default function HomeScreen() {
     transform: [{ translateY: card3Y.value }],
   }));
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1500);
-  }, []);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { Colors } from '../../src/constants/colors';
@@ -14,6 +14,48 @@ export default function AuthCallbackScreen() {
   useEffect(() => {
     const finishSignIn = async () => {
       try {
+        // On web, OAuth response comes in hash fragment, not query params
+        if (Platform.OS === 'web') {
+          const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          const accessToken = hashParams.get('access_token');
+          const refreshToken = hashParams.get('refresh_token');
+          const errorParam = hashParams.get('error');
+          const errorDesc = hashParams.get('error_description');
+
+          if (errorParam) {
+            const msg = `OAuth Error: ${errorParam} - ${errorDesc || 'Unknown error'}`;
+            setDebugInfo(msg);
+            console.error(msg);
+            setMessage('Sign in failed. Redirecting...');
+            setTimeout(() => router.replace('/login'), 2000);
+            return;
+          }
+
+          if (accessToken) {
+            console.log('Found access token in hash, setting session...');
+            const { error } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken || '',
+            });
+
+            if (error) {
+              const msg = `Session Error: ${error.message}`;
+              setDebugInfo(msg);
+              console.error(msg);
+              throw error;
+            }
+
+            console.log('Session set successfully from OAuth token');
+            const { data } = await supabase.auth.getSession();
+            if (data.session) {
+              console.log('Session confirmed, navigating to app');
+              router.replace('/(tabs)');
+              return;
+            }
+          }
+        }
+
+        // Fallback: Try code exchange (native or alternate flow)
         const code = params.code;
         const errorParam = params.error;
         const errorDesc = params.error_description;
@@ -38,7 +80,7 @@ export default function AuthCallbackScreen() {
           }
           console.log('Session exchanged successfully');
         } else {
-          const msg = `No code received. Params: ${JSON.stringify(params)}`;
+          const msg = `No code or token received. Hash params: ${window.location.hash}`;
           setDebugInfo(msg);
           console.log(msg);
         }

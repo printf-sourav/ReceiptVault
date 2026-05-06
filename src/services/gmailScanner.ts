@@ -153,7 +153,7 @@ export async function scanGmail(): Promise<void> {
 
     const processedIds = await getProcessedIds();
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
     for (const msg of messages) {
       if (!msg.id || processedIds.has(msg.id)) continue;

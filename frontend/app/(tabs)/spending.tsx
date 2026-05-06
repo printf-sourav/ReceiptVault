@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   TextInput,
   Dimensions,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, {
@@ -25,54 +26,66 @@ import { BottomSheet } from '../../src/components/BottomSheet';
 import { PillButton } from '../../src/components/PillButton';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
-import {
-  spendingByWeek,
-  spendingByMonth,
-  categoryBreakdown,
-  topMerchants,
-  formatIndianCurrency,
-} from '../../src/lib/mockData';
+import { useData } from '../../src/hooks/useData';
+import { formatIndianCurrency } from '../../src/lib/mockData';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const PERIODS = ['Week', 'Month', 'Year'] as const;
 
 export default function SpendingScreen() {
+  const { spendingByWeek, spendingByMonth, categoryBreakdown, topMerchants, loading, refetch } = useData();
   const [activePeriod, setActivePeriod] = useState<typeof PERIODS[number]>('Week');
   const [askSheetVisible, setAskSheetVisible] = useState(false);
   const [askQuery, setAskQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
-  const getChartData = () => {
+  const chartData = useMemo(() => {
     switch (activePeriod) {
       case 'Week':
         return spendingByWeek.map((d) => ({
-          label: d.day,
+          label: d.day || '',
           amount: d.amount,
         }));
       case 'Month':
         return spendingByMonth.map((d) => ({
-          label: d.month,
+          label: d.month || '',
           amount: d.amount,
         }));
       case 'Year':
+        // For year, we show the last 12 months - spendingByMonth already has this data
         return spendingByMonth.map((d) => ({
-          label: d.month,
-          amount: d.amount * 2,
+          label: d.month || '',
+          amount: d.amount,
         }));
     }
-  };
+  }, [activePeriod, spendingByWeek, spendingByMonth]);
 
-  const chartData = getChartData();
-  const totalForPeriod = chartData.reduce((s, d) => s + d.amount, 0);
-  const maxAmount = Math.max(...chartData.map((d) => d.amount));
-  const maxCategory = Math.max(...categoryBreakdown.map((c) => c.percent));
-  const maxMerchant = Math.max(...topMerchants.map((m) => m.amount));
+  const totalForPeriod = useMemo(
+    () => chartData.reduce((s, d) => s + d.amount, 0),
+    [chartData]
+  );
 
-  const onRefresh = useCallback(() => {
+  const maxAmount = useMemo(
+    () => Math.max(...chartData.map((d) => d.amount), 1),
+    [chartData]
+  );
+
+  const maxCategory = useMemo(
+    () => Math.max(...categoryBreakdown.map((c) => c.percent), 1),
+    [categoryBreakdown]
+  );
+
+  const maxMerchant = useMemo(
+    () => Math.max(...topMerchants.map((m) => m.amount), 1),
+    [topMerchants]
+  );
+
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1500);
-  }, []);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const chartW = SCREEN_WIDTH - 72;
   const points = chartData.map((d, i) => {

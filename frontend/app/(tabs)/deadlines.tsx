@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Pressable,
   Dimensions,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,8 +27,8 @@ import { GlowCard } from '../../src/components/GlowCard';
 import { MonoText } from '../../src/components/MonoText';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
+import { useData } from '../../src/hooks/useData';
 import {
-  receipts,
   formatIndianCurrency,
   getDaysLeft,
   formatDate,
@@ -37,27 +38,46 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function DeadlinesScreen() {
   const router = useRouter();
+  const { receipts, loading, refetch } = useData();
   const [activeView, setActiveView] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [cardStackIndex, setCardStackIndex] = useState(0);
 
-  const deadlineReceipts = receipts
-    .filter((r) => r.returnDeadline)
-    .map((r) => ({
-      ...r,
-      daysLeft: getDaysLeft(r.returnDeadline),
-    }))
-    .sort((a, b) => (a.daysLeft ?? 999) - (b.daysLeft ?? 999));
+  const deadlineReceipts = useMemo(
+    () =>
+      receipts
+        .filter((r) => r.returnDeadline)
+        .map((r) => ({
+          ...r,
+          daysLeft: getDaysLeft(r.returnDeadline),
+        }))
+        .sort((a, b) => (a.daysLeft ?? 999) - (b.daysLeft ?? 999)),
+    [receipts]
+  );
 
-  const todayCount = deadlineReceipts.filter(
-    (r) => r.daysLeft !== null && r.daysLeft >= 0 && r.daysLeft <= 1
-  ).length;
-  const weekCount = deadlineReceipts.filter(
-    (r) => r.daysLeft !== null && r.daysLeft > 1 && r.daysLeft <= 7
-  ).length;
-  const upcomingCount = deadlineReceipts.filter(
-    (r) => r.daysLeft !== null && r.daysLeft > 7
-  ).length;
+  const todayCount = useMemo(
+    () =>
+      deadlineReceipts.filter(
+        (r) => r.daysLeft !== null && r.daysLeft >= 0 && r.daysLeft <= 1
+      ).length,
+    [deadlineReceipts]
+  );
+
+  const weekCount = useMemo(
+    () =>
+      deadlineReceipts.filter(
+        (r) => r.daysLeft !== null && r.daysLeft > 1 && r.daysLeft <= 7
+      ).length,
+    [deadlineReceipts]
+  );
+
+  const upcomingCount = useMemo(
+    () =>
+      deadlineReceipts.filter(
+        (r) => r.daysLeft !== null && r.daysLeft > 7
+      ).length,
+    [deadlineReceipts]
+  );
 
   const todayDotScale = useSharedValue(1);
   const todayDotOpacity = useSharedValue(1);
@@ -80,10 +100,11 @@ export default function DeadlinesScreen() {
     opacity: todayDotOpacity.value,
   }));
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1500);
-  }, []);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const handleSwipeCard = (direction: 'left' | 'right') => {
     if (direction === 'right') {

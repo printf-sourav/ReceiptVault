@@ -3,7 +3,7 @@ import { log, logError } from "../utils/logger";
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 const EXTRACTION_PROMPT = `You are a receipt data extractor. Analyze the receipt image and return ONLY a valid JSON object — no markdown, no explanation, just raw JSON.
 

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ScrollView,
   RefreshControl,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -28,38 +29,41 @@ import { DeadlineBadge } from '../../src/components/DeadlineBadge';
 import { VaultLogo } from '../../src/components/VaultLogo';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
+import { useData, Receipt } from '../../src/hooks/useData';
 import {
-  receipts,
-  Receipt,
   formatIndianCurrency,
   getDaysLeft,
   formatDate,
   getCategoryColor,
 } from '../../src/lib/mockData';
 
-const CATEGORIES = ['All', 'Electronics', 'Food', 'Fashion', 'Groceries', 'Other'];
+const CATEGORIES = ['All', 'Electronics', 'Food', 'Fashion', 'Groceries', 'Health', 'Other'];
 
 export default function ReceiptsScreen() {
   const router = useRouter();
+  const { receipts, loading, error, refetch } = useData();
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchFocused, setSearchFocused] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const filteredReceipts = receipts.filter((r) => {
-    const matchesCategory =
-      activeCategory === 'All' || r.category === activeCategory;
-    const matchesSearch =
-      !search ||
-      r.store.toLowerCase().includes(search.toLowerCase()) ||
-      r.item.toLowerCase().includes(search.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  const filteredReceipts = useMemo(() => {
+    return receipts.filter((r) => {
+      const matchesCategory =
+        activeCategory === 'All' || r.category === activeCategory;
+      const matchesSearch =
+        !search ||
+        r.store.toLowerCase().includes(search.toLowerCase()) ||
+        r.item.toLowerCase().includes(search.toLowerCase());
+      return matchesCategory && matchesSearch;
+    });
+  }, [receipts, activeCategory, search]);
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1500);
-  }, []);
+    await refetch();
+    setRefreshing(false);
+  }, [refetch]);
 
   const renderRightActions = () => (
     <View style={styles.swipeAction}>
@@ -141,29 +145,49 @@ export default function ReceiptsScreen() {
     );
   };
 
-  const ListEmptyComponent = () => (
-    <View style={styles.emptyState}>
-      <VaultLogo size={64} animated={false} />
-      <Text style={styles.emptyTitle}>No receipts found</Text>
-      <Text style={styles.emptySubtext}>
-        Try a different filter or send a photo on WhatsApp
-      </Text>
-      <Pressable
-        style={styles.whatsappBtn}
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-          Linking.openURL('https://wa.me/');
-        }}
-      >
-        <LinearGradient
-          colors={['#25D366', '#128C7E']}
-          style={styles.whatsappGradient}
+  const ListEmptyComponent = () => {
+    if (loading) {
+      return (
+        <View style={styles.emptyState}>
+          <ActivityIndicator size="large" color={Colors.accentCyan} />
+          <Text style={styles.emptyTitle}>Loading receipts...</Text>
+        </View>
+      );
+    }
+
+    if (error) {
+      return (
+        <View style={styles.emptyState}>
+          <Text style={styles.emptyTitle}>Error loading receipts</Text>
+          <Text style={styles.emptySubtext}>{error}</Text>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.emptyState}>
+        <VaultLogo size={64} animated={false} />
+        <Text style={styles.emptyTitle}>No receipts found</Text>
+        <Text style={styles.emptySubtext}>
+          Try a different filter or send a photo on WhatsApp
+        </Text>
+        <Pressable
+          style={styles.whatsappBtn}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            Linking.openURL('https://wa.me/');
+          }}
         >
-          <Text style={styles.whatsappText}>Open WhatsApp</Text>
-        </LinearGradient>
-      </Pressable>
-    </View>
-  );
+          <LinearGradient
+            colors={['#25D366', '#128C7E']}
+            style={styles.whatsappGradient}
+          >
+            <Text style={styles.whatsappText}>Open WhatsApp</Text>
+          </LinearGradient>
+        </Pressable>
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -172,7 +196,7 @@ export default function ReceiptsScreen() {
         <View style={styles.headerRow}>
           <Text style={styles.title}>Receipts</Text>
           <View style={styles.totalPill}>
-            <Text style={styles.totalText}>{receipts.length} total</Text>
+            <Text style={styles.totalText}>{filteredReceipts.length} total</Text>
           </View>
         </View>
 
