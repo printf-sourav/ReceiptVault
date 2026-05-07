@@ -379,6 +379,45 @@ router.get("/receipts/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ---------- DELETE /api/receipts (delete all receipts for user) ----------
+router.delete("/receipts", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { error } = await supabase
+      .from("receipts")
+      .delete()
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e: any) {
+    logError("API DELETE /receipts error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/export (export user's receipts as JSON) ----------
+router.get("/export", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { data, error } = await supabase
+      .from("receipts")
+      .select("*, receipt_items(*)")
+      .eq("user_phone", phone)
+      .order("purchase_date", { ascending: false });
+
+    if (error) throw error;
+
+    const exportData = (data || []).map(mapReceipt);
+
+    // Return JSON export
+    res.json({ exportedAt: new Date().toISOString(), receipts: exportData });
+  } catch (e: any) {
+    logError("API /export error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- GET /api/analytics/spending ----------
 router.get("/analytics/spending", async (req: Request, res: Response) => {
   try {

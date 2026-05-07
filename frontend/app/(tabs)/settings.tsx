@@ -17,6 +17,9 @@ import { PillButton } from '../../src/components/PillButton';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 import { useAuth } from '../../context/AuthContext';
+import { useData } from '../../src/hooks/useData';
+
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
 
 interface SettingItem {
   label: string;
@@ -39,7 +42,10 @@ interface SettingSection {
 
 export default function SettingsScreen() {
   const { user, userPhone, linkedProfile, signOut } = useAuth();
+  const { refetch } = useData();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
 
   const [deadlineAlerts, setDeadlineAlerts] = useState(true);
   const [spendingAlerts, setSpendingAlerts] = useState(true);
@@ -150,9 +156,39 @@ export default function SettingsScreen() {
       items: [
         {
           label: 'Download My Data',
-          onPress: () => {
+          onPress: async () => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            Alert.alert('Export Started', 'Your data export will be ready shortly.');
+            try {
+              setExportLoading(true);
+              const headers = { 'X-User-Phone': userPhone || '' };
+              const resp = await fetch(`${API_URL}/api/export`, { headers });
+              if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err?.error || 'Export failed');
+              }
+              const json = await resp.json();
+
+              // If running on web, trigger JSON download
+              if (typeof document !== 'undefined') {
+                const blob = new Blob([JSON.stringify(json, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `receiptvault_export_${new Date().toISOString()}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                Alert.alert('Export Ready', 'Your data download should start shortly.');
+              } else {
+                // Native fallback: show success and include summary
+                Alert.alert('Export Ready', 'Your data export is ready. Use the web app to download the JSON file.');
+              }
+            } catch (e: any) {
+              Alert.alert('Export Failed', e?.message || String(e));
+            } finally {
+              setExportLoading(false);
+            }
           },
         },
         {
@@ -389,9 +425,29 @@ export default function SettingsScreen() {
           <PillButton
             label="Clear All"
             variant="danger"
-            onPress={() => {
+            onPress={async () => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-              setClearSheet(false);
+              try {
+                setClearLoading(true);
+                const headers = { 'X-User-Phone': userPhone || '' };
+                const resp = await fetch(`${API_URL}/api/receipts`, { method: 'DELETE', headers });
+                if (!resp.ok) {
+                  const err = await resp.json().catch(() => ({}));
+                  throw new Error(err?.error || 'Failed to clear receipts');
+                }
+                setClearSheet(false);
+                Alert.alert('Cleared', 'All receipt history has been removed.');
+                // refresh app data
+                try {
+                  await refetch();
+                } catch (e) {
+                  // ignore
+                }
+              } catch (e: any) {
+                Alert.alert('Clear Failed', e?.message || String(e));
+              } finally {
+                setClearLoading(false);
+              }
             }}
             style={{ flex: 1 }}
           />

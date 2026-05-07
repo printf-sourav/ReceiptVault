@@ -20,6 +20,7 @@ import { MonoText } from '../src/components/MonoText';
 import { Colors } from '../src/constants/colors';
 import { Fonts, FontSizes } from '../src/constants/typography';
 import { uploadReceipt } from '../lib/api';
+import { useData } from '../src/hooks/useData';
 import { formatIndianCurrency } from '../src/lib/mockData';
 
 export default function UploadReceiptScreen() {
@@ -28,6 +29,7 @@ export default function UploadReceiptScreen() {
   const [uploading, setUploading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  const { refetch } = useData();
 
   const pickImage = async (useCamera: boolean) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -71,6 +73,18 @@ export default function UploadReceiptScreen() {
       if (res.status === 200 && data.receipt) {
         setResult(data.receipt);
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Refresh global receipt/stats data so totals update immediately
+        try {
+          await refetch();
+        } catch (e) {
+          // ignore refetch errors
+        }
+        try {
+          const { publish } = await import('../src/lib/eventBus');
+          publish('data:updated');
+        } catch (e) {
+          // ignore
+        }
       } else {
         setError(data.error || 'Upload failed');
       }

@@ -56,6 +56,47 @@ export async function insertReceipt(
   const canonicalPhone = normalizePhone(userPhone);
   const userId = await getOrCreateUser(canonicalPhone);
   const purchaseDate = data.purchase_date || new Date().toISOString().split("T")[0];
+  // Normalize purchaseDate to ISO YYYY-MM-DD to ensure consistent parsing on frontend
+  function normalizeDateInput(d: string | null | undefined): string {
+    if (!d) return new Date().toISOString().split("T")[0];
+    const s = String(d).trim();
+    // If already in YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    // If in DD/MM/YYYY or D/M/YYYY, convert
+    const dm = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (dm) {
+      const day = dm[1].padStart(2, '0');
+      const month = dm[2].padStart(2, '0');
+      let year = dm[3];
+      if (year.length === 2) year = '20' + year; // assume 20xx
+      return `${year}-${month}-${day}`;
+    }
+    // Fallback: try to parse Date and format YYYY-MM-DD
+    const parsed = new Date(s);
+    if (!isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+    // Last resort: today
+    return new Date().toISOString().split("T")[0];
+  }
+
+  const normalizedPurchaseDate = normalizeDateInput(purchaseDate);
+  // If parsed purchase date is far in the past (likely OCR/year-parsing error),
+  // prefer the current date so dashboard totals reflect recent uploads.
+  try {
+    const parsed = new Date(normalizedPurchaseDate + 'T00:00:00Z');
+    const now = new Date();
+    const daysDiff = Math.floor((now.getTime() - parsed.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysDiff > 120) {
+      // Treat as recent receipt uploaded today
+      const today = now.toISOString().split('T')[0];
+      log(`Normalizing old purchase_date ${normalizedPurchaseDate} -> ${today}`);
+      // override with today's date
+      (normalizedPurchaseDate as any) = today;
+    }
+  } catch (e) {
+    // ignore parsing issues
+  }
 
   const returnDeadlineDate = data.return_deadline_days !== null
     ? addDays(purchaseDate, data.return_deadline_days)
@@ -71,7 +112,7 @@ export async function insertReceipt(
       user_id: userId,
       user_phone: canonicalPhone,
       store_name: data.store_name,
-      purchase_date: purchaseDate,
+      purchase_date: normalizedPurchaseDate,
       total_amount: data.total_amount,
       currency: data.currency,
       r2_image_url: r2Url,

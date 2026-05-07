@@ -125,12 +125,41 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const init = async () => {
       try {
-        const [sessionResult, phoneResult] = await Promise.all([
-          supabase.auth.getSession(),
-          getUserPhone(),
+        // On web, check for OAuth errors in URL query params and clear them
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const urlParams = new URLSearchParams(window.location.search);
+          const errorParam = urlParams.get('error');
+          
+          if (errorParam) {
+            const errorDesc = urlParams.get('error_description') || 'Unknown OAuth error';
+            const errorMsg = `${errorParam}: ${errorDesc}`;
+            console.warn('OAuth error detected:', errorMsg);
+            setError(errorMsg);
+            
+            // Clear the error params from URL so they don't persist
+            window.history.replaceState({}, document.title, window.location.pathname);
+            
+            // Still proceed with initialization, just with the error set
+            // This will show the error on the login page
+          }
+        }
+
+        // Use Promise.race to timeout long-running operations
+        const sessionPromise = supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+        const phonePromise = getUserPhone().catch(() => null);
+        
+        // Wait up to 3 seconds for both operations
+        const sessionResult = await Promise.race([
+          sessionPromise,
+          new Promise(resolve => setTimeout(() => resolve({ data: { session: null } }), 3000))
+        ]);
+        
+        const phoneResult = await Promise.race([
+          phonePromise,
+          new Promise(resolve => setTimeout(() => resolve(null), 3000))
         ]);
 
-        if (sessionResult.data.session) {
+        if (sessionResult?.data?.session) {
           setSession(sessionResult.data.session);
           await syncProfileFromSession(sessionResult.data.session);
         }

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import axios from 'axios';
+import { subscribe } from '../lib/eventBus';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -113,6 +114,14 @@ export const useData = () => {
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  useEffect(() => {
+    // Re-fetch when other parts of the app signal data changes
+    const unsub = subscribe('data:updated', () => {
+      fetchData();
+    });
+    return unsub;
   }, [fetchData]);
 
   return {

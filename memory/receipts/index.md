@@ -20,3 +20,18 @@
 | 2025-05-01 | D MART | 750 | INR | 2855dc63-c225-4291-8102-49c7e3c376d7 |
 | 2025-05-01 | DMART | 750 | INR | 079f9822-0ccd-4d8e-857d-da4cf713c5c5 |
 | 2026-05-06 | Lacoste | 11999 | INR | 996c45a4-2a9c-4dea-b41b-d4a84a720643 |
+| 2025-05-01 | DMART | 750 | INR | 227443ee-021a-4e4d-ad69-d1a50c552bf6 |
+| 2025-05-24 | Spencer's | 90 | INR | 32212ecb-8cdf-4471-ae02-744fd422ff20 |
+| 2026-05-07 | Unknown | 0 | INR | 6ec2d50b-0a7f-47e4-81e6-6cfe87900d95 |
+| 2026-05-07 | Unknown | 0 | INR | 35ad95a0-db20-4509-a655-88c290c28151 |
+| 2026-05-07 | Unknown | 0 | INR | b46b2e68-18e4-4eac-afbe-f6cd085ee61e |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | abc67311-e4cd-49ce-8efe-534172fc5446 |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | a861261f-ee63-49d1-8319-b14ba7d96c52 |
+| 2025-05-06 | Spencer's | 90 | INR | 43127015-0e01-4bf6-a802-83cf44925457 |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | 387ed8ba-f114-49bf-a154-a990627fc53a |
+| 2025-05-01 | DMART | 750 | INR | dfb96a52-a72c-44e5-b978-7b2ec412bc83 |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | 4de4d074-e37d-4360-86ee-2c5a3a0e176f |
+| 2017-07-28 | Walmart | 98.21 | USD | bfb0fb48-3670-4238-b9f7-955bb0b42922 |
+| 2017-07-28 | Walmart | 98.21 | USD | f2c3d73f-7483-41d1-b478-afdd51b21266 |
+| 2025-05-06 | Spencer's | 90 | INR | 280d14a8-03e6-4832-ac6b-7cd8e90c6825 |
+| 2025-05-01 | DMART | 750 | INR | dfa45449-53f4-4cf2-a029-5e1839d2c90f |

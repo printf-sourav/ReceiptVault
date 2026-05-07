@@ -6,6 +6,19 @@ import { getRegistrationStatus, saveUserPhone } from '../../lib/api';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 
+// Helper to wrap async operations with timeout
+const withTimeout = <T,>(
+  promise: Promise<T>,
+  timeoutMs: number = 5000
+): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Operation timed out after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+};
+
 export default function AuthCallbackScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{ code?: string; error?: string; error_description?: string }>();
@@ -15,16 +28,19 @@ export default function AuthCallbackScreen() {
   useEffect(() => {
     const finishSignIn = async () => {
       try {
-        // On web, OAuth response comes in hash fragment, not query params
+        // On web, OAuth response comes in hash fragment or query params
         if (Platform.OS === 'web') {
+          // Check both hash params (normal OAuth flow) and query params (error cases)
           const hashParams = new URLSearchParams(window.location.hash.substring(1));
+          const queryParams = new URLSearchParams(window.location.search);
+          
           const accessToken = hashParams.get('access_token');
           const refreshToken = hashParams.get('refresh_token');
-          const errorParam = hashParams.get('error');
-          const errorDesc = hashParams.get('error_description');
+          let errorParamHash = hashParams.get('error') || queryParams.get('error');
+          let errorDescHash = hashParams.get('error_description') || queryParams.get('error_description');
 
-          if (errorParam) {
-            const msg = `OAuth Error: ${errorParam} - ${errorDesc || 'Unknown error'}`;
+          if (errorParamHash) {
+            const msg = `OAuth Error: ${errorParamHash} - ${errorDescHash || 'Unknown error'}`;
             setDebugInfo(msg);
             console.error(msg);
             setMessage('Sign in failed. Redirecting...');
@@ -60,19 +76,29 @@ export default function AuthCallbackScreen() {
 
               const email = data.session.user.email;
               if (email) {
-                const statusResponse = await getRegistrationStatus({ email });
-                const registration = statusResponse.data;
+                try {
+                  const statusResponse = await withTimeout(
+                    getRegistrationStatus({ email }),
+                    3000
+                  );
+                  const registration = statusResponse.data;
 
-                if (registration?.registered && registration?.phone) {
-                  await saveUserPhone(registration.phone);
-                  console.log('Registered OAuth user found, navigating to app');
-                  router.replace('/(tabs)');
+                  if (registration?.registered && registration?.phone) {
+                    await saveUserPhone(registration.phone);
+                    console.log('Registered OAuth user found, navigating to app');
+                    router.replace('/(tabs)');
+                    return;
+                  }
+
+                  console.log('OAuth user is not registered yet, sending to login completion');
+                  router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
+                  return;
+                } catch (apiErr: any) {
+                  // If backend is unreachable, still proceed with registration flow
+                  console.warn('Registration status check failed, proceeding to register:', apiErr.message);
+                  router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
                   return;
                 }
-
-                console.log('OAuth user is not registered yet, sending to login completion');
-                router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
-                return;
               }
             }
           }
@@ -80,11 +106,11 @@ export default function AuthCallbackScreen() {
 
         // Fallback: Try code exchange (native or alternate flow)
         const code = params.code;
-        const errorParam = params.error;
-        const errorDesc = params.error_description;
+        const errorParamCode = params.error;
+        const errorDescCode = params.error_description;
 
-        if (errorParam) {
-          const msg = `OAuth Error: ${errorParam} - ${errorDesc || 'Unknown error'}`;
+        if (errorParamCode) {
+          const msg = `OAuth Error: ${errorParamCode} - ${errorDescCode || 'Unknown error'}`;
           setDebugInfo(msg);
           console.error(msg);
           setMessage('Sign in failed. Redirecting...');
@@ -121,19 +147,29 @@ export default function AuthCallbackScreen() {
 
           const email = data.session.user.email;
           if (email) {
-            const statusResponse = await getRegistrationStatus({ email });
-            const registration = statusResponse.data;
+            try {
+              const statusResponse = await withTimeout(
+                getRegistrationStatus({ email }),
+                3000
+              );
+              const registration = statusResponse.data;
 
-            if (registration?.registered && registration?.phone) {
-              await saveUserPhone(registration.phone);
-              console.log('Registered OAuth user found, navigating to app');
-              router.replace('/(tabs)');
+              if (registration?.registered && registration?.phone) {
+                await saveUserPhone(registration.phone);
+                console.log('Registered OAuth user found, navigating to app');
+                router.replace('/(tabs)');
+                return;
+              }
+
+              console.log('OAuth user is not registered yet, sending to login completion');
+              router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
+              return;
+            } catch (apiErr: any) {
+              // If backend is unreachable, still proceed with registration flow
+              console.warn('Registration status check failed, proceeding to register:', apiErr.message);
+              router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
               return;
             }
-
-            console.log('OAuth user is not registered yet, sending to login completion');
-            router.replace(`/login?mode=register&email=${encodeURIComponent(email)}`);
-            return;
           }
         }
 
@@ -142,10 +178,10 @@ export default function AuthCallbackScreen() {
         setMessage('Unable to complete sign in. Redirecting...');
         setTimeout(() => router.replace('/login'), 1200);
       } catch (error: any) {
-        const msg = `Catch Error: ${error?.message || JSON.stringify(error)}`;
+        const msg = `Error: ${error?.message || JSON.stringify(error)}`;
         setDebugInfo(msg);
         console.error(msg);
-        setMessage('Sign in failed. Check console for details.');
+        setMessage('Sign in failed. Redirecting...');
         setTimeout(() => router.replace('/login'), 2000);
       }
     };
