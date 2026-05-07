@@ -147,16 +147,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Use Promise.race to timeout long-running operations
         const sessionPromise = supabase.auth.getSession().catch(() => ({ data: { session: null } }));
         const phonePromise = getUserPhone().catch(() => null);
+        const sessionTimeout = new Promise<{ data: { session: Session | null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 3000)
+        );
+        const phoneTimeout = new Promise<string | null>((resolve) =>
+          setTimeout(() => resolve(null), 3000)
+        );
         
         // Wait up to 3 seconds for both operations
         const sessionResult = await Promise.race([
           sessionPromise,
-          new Promise(resolve => setTimeout(() => resolve({ data: { session: null } }), 3000))
+          sessionTimeout
         ]);
         
         const phoneResult = await Promise.race([
           phonePromise,
-          new Promise(resolve => setTimeout(() => resolve(null), 3000))
+          phoneTimeout
         ]);
 
         if (sessionResult?.data?.session) {

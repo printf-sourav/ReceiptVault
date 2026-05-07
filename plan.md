@@ -22,7 +22,7 @@ patterns — sending proactive alerts back via WhatsApp.
 - BullMQ + Redis
 - Gemini 2.0 Flash (Vision + Embeddings)
 - Cloudflare R2 (image storage)
-- WhatsApp Business API + Telegram
+- WhatsApp Business API
 
 **Your job**: Build the ReceiptVault mobile app — a companion app to the WhatsApp
 bot that gives users a beautiful visual interface to their receipt data.
@@ -488,7 +488,7 @@ Grouped sections (iOS-style grouped list, but styled dark):
 
 Profile:
 - Phone number row + "Verified ✓" accentEmerald badge
-- "Notification channel" row → WhatsApp / Telegram toggle
+- "Notification channel" row → WhatsApp only
 
 Notifications:
 - "Quiet Hours" row → tap opens time range bottom sheet

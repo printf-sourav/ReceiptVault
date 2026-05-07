@@ -18,8 +18,7 @@ import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 import { useAuth } from '../../context/AuthContext';
 import { useData } from '../../src/hooks/useData';
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+import { deleteAllReceipts, exportReceipts } from '../../lib/api';
 
 interface SettingItem {
   label: string;
@@ -50,7 +49,6 @@ export default function SettingsScreen() {
   const [deadlineAlerts, setDeadlineAlerts] = useState(true);
   const [spendingAlerts, setSpendingAlerts] = useState(true);
   const [vaultMode, setVaultMode] = useState(false);
-  const [notifChannel, setNotifChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [alertFrequency, setAlertFrequency] = useState('Immediate');
   const [quietHoursSheet, setQuietHoursSheet] = useState(false);
   const [frequencySheet, setFrequencySheet] = useState(false);
@@ -92,11 +90,7 @@ export default function SettingsScreen() {
         },
         {
           label: 'Notification Channel',
-          value: notifChannel === 'whatsapp' ? 'WhatsApp' : 'Telegram',
-          onPress: () => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            setNotifChannel(notifChannel === 'whatsapp' ? 'telegram' : 'whatsapp');
-          },
+          value: 'WhatsApp',
         },
       ],
     },
@@ -160,13 +154,7 @@ export default function SettingsScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             try {
               setExportLoading(true);
-              const headers = { 'X-User-Phone': userPhone || '' };
-              const resp = await fetch(`${API_URL}/api/export`, { headers });
-              if (!resp.ok) {
-                const err = await resp.json().catch(() => ({}));
-                throw new Error(err?.error || 'Export failed');
-              }
-              const json = await resp.json();
+              const { data: json } = await exportReceipts();
 
               // If running on web, trigger JSON download
               if (typeof document !== 'undefined') {
@@ -429,12 +417,7 @@ export default function SettingsScreen() {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
               try {
                 setClearLoading(true);
-                const headers = { 'X-User-Phone': userPhone || '' };
-                const resp = await fetch(`${API_URL}/api/receipts`, { method: 'DELETE', headers });
-                if (!resp.ok) {
-                  const err = await resp.json().catch(() => ({}));
-                  throw new Error(err?.error || 'Failed to clear receipts');
-                }
+                await deleteAllReceipts();
                 setClearSheet(false);
                 Alert.alert('Cleared', 'All receipt history has been removed.');
                 // refresh app data

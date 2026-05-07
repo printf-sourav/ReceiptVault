@@ -3,7 +3,7 @@ import { downloadMedia } from "../services/mediaDownloader";
 import { uploadToR2 } from "../services/r2Uploader";
 import { extractReceiptData } from "../services/geminiVision";
 import { validateReceiptData } from "../validators/receiptSchema";
-import { insertReceipt } from "../services/supabaseWriter";
+import { DuplicateReceiptError, insertReceipt } from "../services/supabaseWriter";
 import { sendNotification, buildConfirmationMessage } from "../services/notificationSender";
 import { appendReceiptToIndex } from "../utils/memory";
 import { scheduleAlerts } from "../queue/producer";
@@ -76,6 +76,10 @@ async function processIncomingImage(mediaId: string, senderPhone: string): Promi
     
     await sendNotification(senderPhone, buildConfirmationMessage(validatedData));
   } catch (error) {
+    if (error instanceof DuplicateReceiptError) {
+      await sendNotification(senderPhone, "This receipt is already saved in your vault. I won't add it again.").catch(() => {});
+      return;
+    }
     logError("Receipt processing failed", error);
     await sendNotification(
       senderPhone,

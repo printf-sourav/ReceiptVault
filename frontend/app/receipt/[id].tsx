@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -25,22 +25,50 @@ import { BottomSheet } from '../../src/components/BottomSheet';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 import {
-  receipts,
   formatIndianCurrency,
   getDaysLeft,
   formatDate,
 } from '../../src/lib/mockData';
+import { deleteReceipt, getReceipt } from '../../lib/api';
+import { publish } from '../../src/lib/eventBus';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ReceiptDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const receipt = receipts.find((r) => r.id === id);
+  const [receipt, setReceipt] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [imageModal, setImageModal] = useState(false);
   const [deleteSheet, setDeleteSheet] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [countdown, setCountdown] = useState({ days: 0, hours: 0, minutes: 0 });
+
+  const loadReceipt = useCallback(async () => {
+    if (!id) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await getReceipt(id);
+      setReceipt({
+        ...data,
+        date: new Date(data.date),
+        returnDeadline: data.returnDeadline ? new Date(data.returnDeadline) : null,
+        warrantyExpiry: data.warrantyExpiry ? new Date(data.warrantyExpiry) : null,
+      });
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e?.message || 'Receipt not found');
+      setReceipt(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    loadReceipt();
+  }, [loadReceipt]);
 
   useEffect(() => {
     if (!receipt?.returnDeadline) return;
@@ -63,10 +91,18 @@ export default function ReceiptDetailScreen() {
     return () => clearInterval(interval);
   }, [receipt]);
 
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Text style={styles.errorText}>Loading receipt...</Text>
+      </SafeAreaView>
+    );
+  }
+
   if (!receipt) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.errorText}>Receipt not found</Text>
+        <Text style={styles.errorText}>{error || 'Receipt not found'}</Text>
       </SafeAreaView>
     );
   }
@@ -193,7 +229,7 @@ export default function ReceiptDetailScreen() {
         {/* Itemized Table */}
         <Animated.View entering={FadeInDown.delay(400).duration(400)}>
           <Text style={styles.itemsTitle}>Items</Text>
-          {receipt.items.map((item, index) => (
+          {(receipt.items || []).map((item: { name: string; quantity: number; price: number }, index: number) => (
             <View
               key={index}
               style={[
@@ -289,12 +325,22 @@ export default function ReceiptDetailScreen() {
           <PillButton
             label="Delete"
             variant="danger"
-            onPress={() => {
+            onPress={async () => {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-              setDeleteSheet(false);
-              router.back();
+              try {
+                setDeleting(true);
+                await deleteReceipt(receipt.id);
+                publish('data:updated');
+                setDeleteSheet(false);
+                router.back();
+              } catch (e: any) {
+                setError(e?.response?.data?.error || e?.message || 'Delete failed');
+              } finally {
+                setDeleting(false);
+              }
             }}
             style={{ flex: 1 }}
+            disabled={deleting}
           />
         </View>
       </BottomSheet>

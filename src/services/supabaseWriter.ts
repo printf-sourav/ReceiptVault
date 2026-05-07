@@ -7,6 +7,16 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!;
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+export class DuplicateReceiptError extends Error {
+  receiptId: string;
+
+  constructor(receiptId: string) {
+    super("This receipt already exists in your vault.");
+    this.name = "DuplicateReceiptError";
+    this.receiptId = receiptId;
+  }
+}
+
 function normalizePhone(phone: string): string {
   const digits = String(phone || "").replace(/\D/g, "");
   if (digits.length === 10) return `+91${digits}`;
@@ -80,7 +90,7 @@ export async function insertReceipt(
     return new Date().toISOString().split("T")[0];
   }
 
-  const normalizedPurchaseDate = normalizeDateInput(purchaseDate);
+  let normalizedPurchaseDate = normalizeDateInput(purchaseDate);
   // If parsed purchase date is far in the past (likely OCR/year-parsing error),
   // prefer the current date so dashboard totals reflect recent uploads.
   try {
@@ -91,20 +101,39 @@ export async function insertReceipt(
       // Treat as recent receipt uploaded today
       const today = now.toISOString().split('T')[0];
       log(`Normalizing old purchase_date ${normalizedPurchaseDate} -> ${today}`);
-      // override with today's date
-      (normalizedPurchaseDate as any) = today;
+      normalizedPurchaseDate = today;
     }
   } catch (e) {
     // ignore parsing issues
   }
 
   const returnDeadlineDate = data.return_deadline_days !== null
-    ? addDays(purchaseDate, data.return_deadline_days)
+    ? addDays(normalizedPurchaseDate, data.return_deadline_days)
     : null;
 
   const warrantyExpiryDate = data.warranty_months !== null
-    ? addDays(purchaseDate, data.warranty_months * 30)
+    ? addDays(normalizedPurchaseDate, data.warranty_months * 30)
     : null;
+
+  const { data: possibleDuplicates, error: duplicateLookupError } = await supabase
+    .from("receipts")
+    .select("id, store_name, total_amount, receipt_number, purchase_date")
+    .eq("user_phone", canonicalPhone)
+    .eq("purchase_date", normalizedPurchaseDate);
+
+  if (duplicateLookupError) throw duplicateLookupError;
+
+  const normalizedStore = data.store_name.trim().toLowerCase();
+  const duplicate = (possibleDuplicates || []).find((receipt: any) => {
+    const sameStore = String(receipt.store_name || "").trim().toLowerCase() === normalizedStore;
+    const sameAmount = Math.abs(Number(receipt.total_amount || 0) - Number(data.total_amount || 0)) < 1;
+    const sameReceiptNumber = data.receipt_number && receipt.receipt_number === data.receipt_number;
+    return sameReceiptNumber || (sameStore && sameAmount);
+  });
+
+  if (duplicate) {
+    throw new DuplicateReceiptError(duplicate.id);
+  }
 
   const { data: receipt, error: receiptError } = await supabase
     .from("receipts")

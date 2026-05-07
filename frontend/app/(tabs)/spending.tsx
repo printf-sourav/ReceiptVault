@@ -18,7 +18,7 @@ import Animated, {
   FadeInDown,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { GlowCard } from '../../src/components/GlowCard';
 import { MonoText } from '../../src/components/MonoText';
@@ -43,20 +43,27 @@ export default function SpendingScreen() {
   const chartData = useMemo(() => {
     switch (activePeriod) {
       case 'Week':
-        return spendingByWeek.map((d) => ({
+        return (spendingByWeek.length > 0 ? spendingByWeek : [
+          { day: 'Mon', amount: 0 },
+          { day: 'Tue', amount: 0 },
+          { day: 'Wed', amount: 0 },
+          { day: 'Thu', amount: 0 },
+          { day: 'Fri', amount: 0 },
+          { day: 'Sat', amount: 0 },
+          { day: 'Sun', amount: 0 },
+        ]).map((d) => ({
           label: d.day || '',
-          amount: d.amount,
+          amount: Number(d.amount || 0),
         }));
       case 'Month':
         return spendingByMonth.map((d) => ({
           label: d.month || '',
-          amount: d.amount,
+          amount: Number(d.amount || 0),
         }));
       case 'Year':
-        // For year, we show the last 12 months - spendingByMonth already has this data
         return spendingByMonth.map((d) => ({
           label: d.month || '',
-          amount: d.amount,
+          amount: Number(d.amount || 0),
         }));
     }
   }, [activePeriod, spendingByWeek, spendingByMonth]);
@@ -88,9 +95,10 @@ export default function SpendingScreen() {
   }, [refetch]);
 
   const chartW = SCREEN_WIDTH - 72;
+  const hasSpend = chartData.some((d) => d.amount > 0);
   const points = chartData.map((d, i) => {
-    const x = (i / (chartData.length - 1)) * chartW;
-    const y = 170 - (d.amount / maxAmount) * 140;
+    const x = chartData.length === 1 ? chartW / 2 : (i / (chartData.length - 1)) * chartW;
+    const y = hasSpend ? 170 - (d.amount / maxAmount) * 140 : 150;
     return { x, y };
   });
   const linePath = `M${points.map((p) => `${p.x},${p.y}`).join(' L')}`;
@@ -143,19 +151,32 @@ export default function SpendingScreen() {
         {/* Hero Chart */}
         <GlowCard style={styles.chartCard}>
           <Svg width="100%" height={200} viewBox={`0 0 ${chartW} 200`}>
-            <Path d={areaPath} fill={Colors.accentCyan} opacity={0.15} />
+            <Path d={areaPath} fill={Colors.accentCyan} opacity={hasSpend ? 0.15 : 0.08} />
             <Path
               d={linePath}
               stroke={Colors.accentCyan}
-              strokeWidth={2}
+              strokeWidth={hasSpend ? 2.5 : 3}
+              strokeDasharray={hasSpend ? undefined : "8 8"}
+              opacity={hasSpend ? 1 : 0.95}
               fill="none"
             />
             {points.map((p, i) => (
-              <Animated.View key={i}>
-                {/* Will use circles for data points */}
-              </Animated.View>
+              <Circle
+                key={i}
+                cx={p.x}
+                cy={p.y}
+                r={hasSpend ? 3 : 4}
+                fill={Colors.accentCyan}
+                opacity={hasSpend ? 1 : 0.75}
+              />
             ))}
           </Svg>
+          {!hasSpend && (
+            <View style={styles.emptyChartOverlay}>
+              <Text style={styles.emptyChartTitle}>No spending in this period</Text>
+              <Text style={styles.emptyChartSubtitle}>Add receipts dated in this period to see the trend.</Text>
+            </View>
+          )}
           <View style={styles.chartLabels}>
             {chartData.map((d) => (
               <Text key={d.label} style={styles.chartLabel}>
@@ -342,6 +363,27 @@ const styles = StyleSheet.create({
   chartCard: {
     padding: 16,
     marginBottom: 8,
+    position: 'relative',
+  },
+  emptyChartOverlay: {
+    position: 'absolute',
+    top: 72,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    gap: 4,
+  },
+  emptyChartTitle: {
+    fontFamily: Fonts.bodyMedium,
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
+  },
+  emptyChartSubtitle: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.xs,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    paddingHorizontal: 24,
   },
   chartLabels: {
     flexDirection: 'row',

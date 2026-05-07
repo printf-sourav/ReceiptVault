@@ -35,3 +35,8 @@
 | 2017-07-28 | Walmart | 98.21 | USD | f2c3d73f-7483-41d1-b478-afdd51b21266 |
 | 2025-05-06 | Spencer's | 90 | INR | 280d14a8-03e6-4832-ac6b-7cd8e90c6825 |
 | 2025-05-01 | DMART | 750 | INR | dfa45449-53f4-4cf2-a029-5e1839d2c90f |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | 599130d6-28f5-4705-93f1-ca19af919fff |
+| 2025-03-01 | Vishal Mega Mart | 7200 | INR | f505ebf7-2c6f-4b06-ada3-487e39ff26c8 |
+| 2025-05-01 | D Mart | 750 | INR | e1d74588-7957-4459-9576-441eba49dc8a |
+| 2025-05-06 | Spencer's | 90 | INR | ec8eab9d-ff86-4cbf-a76d-2087eb715636 |
+| 2025-05-06 | Spencer's | 90 | INR | 52ec7619-13e6-4018-9dd0-f0fb53179769 |

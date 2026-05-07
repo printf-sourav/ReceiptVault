@@ -33,6 +33,12 @@ const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config) => {
+  const savedBaseUrl = await AsyncStorage.getItem(STORAGE_KEY_BASE_URL);
+  if (savedBaseUrl) {
+    BASE_URL = savedBaseUrl;
+  }
+  config.baseURL = `${BASE_URL}/api`;
+
   const phone = await AsyncStorage.getItem(STORAGE_KEY_PHONE);
   if (phone) {
     config.headers['x-user-phone'] = normalizePhone(phone);
@@ -93,6 +99,27 @@ export const getReceipts = (limit?: number) =>
 
 export const getReceipt = (id: string) =>
   api.get(`/receipts/${id}`);
+
+export const deleteReceipt = (id: string) =>
+  api.delete(`/receipts/${id}`);
+
+export const deleteAllReceipts = () =>
+  api.delete('/receipts');
+
+export const exportReceipts = () =>
+  api.get('/export');
+
+export const getSpendingAnalytics = (period: 'week' | 'month' | 'year' = 'week') =>
+  api.get('/analytics/spending', { params: { period } });
+
+export const getCategoryAnalytics = () =>
+  api.get('/analytics/categories');
+
+export const getTopMerchants = () =>
+  api.get('/analytics/top-merchants');
+
+export const getDashboardStats = () =>
+  api.get('/dashboard/stats');
 
 // User persistence
 export const saveUserPhone = async (phone: string) => {

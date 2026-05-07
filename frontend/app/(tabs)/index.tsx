@@ -131,32 +131,70 @@ export default function HomeScreen() {
     return computedThisWeekTotal > 0 ? computedThisWeekTotal : chartTotal;
   }, [computedThisWeekTotal, spendingByWeek]);
 
-  const computedThisMonthSpend = useMemo(() => {
+  const weeklyChartData = useMemo(
+    () =>
+      spendingByWeek.length > 0 ? spendingByWeek : [
+        { day: 'Mon', amount: 0 },
+        { day: 'Tue', amount: 0 },
+        { day: 'Wed', amount: 0 },
+        { day: 'Thu', amount: 0 },
+        { day: 'Fri', amount: 0 },
+        { day: 'Sat', amount: 0 },
+        { day: 'Sun', amount: 0 },
+      ],
+    [spendingByWeek]
+  );
+
+  const hasWeeklySpend = useMemo(
+    () => weeklyChartData.some((d) => Number(d.amount || 0) > 0),
+    [weeklyChartData]
+  );
+
+  const monthSummary = useMemo(() => {
     const now = new Date();
     const month = now.getMonth();
     const year = now.getFullYear();
-    return receipts
+    const currentMonthReceipts = receipts
       .filter((r) => r.date.getMonth() === month && r.date.getFullYear() === year)
-      .reduce((sum, r) => sum + r.amount, 0);
+      .filter((r) => !Number.isNaN(r.date.getTime()));
+
+    if (currentMonthReceipts.length > 0) {
+      return {
+        total: currentMonthReceipts.reduce((sum, r) => sum + Number(r.amount || 0), 0),
+        count: currentMonthReceipts.length,
+        label: 'TOTAL SPENT THIS MONTH',
+      };
+    }
+
+    const validReceipts = receipts
+      .filter((r) => !Number.isNaN(r.date.getTime()))
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
+
+    if (validReceipts.length === 0) {
+      return { total: 0, count: 0, label: 'TOTAL SPENT THIS MONTH' };
+    }
+
+    const latest = validReceipts[0].date;
+    const latestMonthReceipts = validReceipts.filter(
+      (r) => r.date.getMonth() === latest.getMonth() && r.date.getFullYear() === latest.getFullYear()
+    );
+    const monthName = latest.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }).toUpperCase();
+
+    return {
+      total: latestMonthReceipts.reduce((sum, r) => sum + Number(r.amount || 0), 0),
+      count: latestMonthReceipts.length,
+      label: `TOTAL SPENT ${monthName}`,
+    };
   }, [receipts]);
 
   const thisMonthSpend = useMemo(() => {
     if (typeof dashboardStats?.thisMonthSpend === 'number' && dashboardStats.thisMonthSpend > 0) {
       return dashboardStats.thisMonthSpend;
     }
-    return computedThisMonthSpend;
-  }, [computedThisMonthSpend, dashboardStats?.thisMonthSpend]);
+    return monthSummary.total;
+  }, [monthSummary.total, dashboardStats?.thisMonthSpend]);
 
-  const thisMonthReceiptCount = useMemo(() => {
-    const now = new Date();
-    const month = now.getMonth();
-    const year = now.getFullYear();
-
-    return receipts.filter((r) => {
-      const d = r.date;
-      return d.getMonth() === month && d.getFullYear() === year;
-    }).length;
-  }, [receipts]);
+  const thisMonthReceiptCount = monthSummary.count;
 
   const monthComparisonText = useMemo(() => {
     const now = new Date();
@@ -285,7 +323,7 @@ export default function HomeScreen() {
 
         {/* Hero Stat Card */}
         <GlowCard style={styles.heroCard}>
-          <Text style={styles.heroLabel}>TOTAL SPENT THIS MONTH</Text>
+          <Text style={styles.heroLabel}>{monthSummary.label}</Text>
           <MonoText style={styles.heroAmount}>
             {formatIndianCurrency(thisMonthSpend)}
           </MonoText>
@@ -489,37 +527,38 @@ export default function HomeScreen() {
         </View>
 
         <GlowCard style={styles.chartCard}>
-          <Svg width="100%" height={160} viewBox={`0 0 ${SCREEN_WIDTH - 72} 160`}>
-            {(() => {
-              const w = SCREEN_WIDTH - 72;
-              const maxAmt = Math.max(...spendingByWeek.map((d) => d.amount));
-              const points = spendingByWeek.map((d, i) => {
-                const x = (i / (spendingByWeek.length - 1)) * w;
-                const y = 140 - (d.amount / maxAmt) * 120;
-                return `${x},${y}`;
-              });
-              const linePath = `M${points.join(' L')}`;
-              const areaPath = `${linePath} L${w},160 L0,160 Z`;
-              return (
-                <>
-                  <Path d={areaPath} fill={Colors.accentCyan} opacity={0.15} />
-                  <Path
-                    d={linePath}
-                    stroke={Colors.accentCyan}
-                    strokeWidth={2}
-                    fill="none"
-                  />
-                </>
-              );
-            })()}
-          </Svg>
-          <View style={styles.chartLabels}>
-            {spendingByWeek.map((d) => (
-              <Text key={d.day} style={styles.chartLabel}>
-                {d.day}
-              </Text>
-            ))}
-          </View>
+          {/* Pure View bar chart — no SVG */}
+          {(() => {
+            const maxAmt = Math.max(...weeklyChartData.map((d) => Number(d.amount || 0)), 1);
+            const BAR_HEIGHT = 120;
+            return (
+              <View style={styles.barChartRow}>
+                {weeklyChartData.map((d) => {
+                  const amt = Number(d.amount || 0);
+                  const barH = hasWeeklySpend ? Math.max((amt / maxAmt) * BAR_HEIGHT, 4) : 4;
+                  return (
+                    <View key={d.day} style={styles.barChartCol}>
+                      {amt > 0 && (
+                        <Text style={styles.barAmtLabel}>
+                          {amt >= 1000 ? `₹${(amt / 1000).toFixed(1)}k` : `₹${amt}`}
+                        </Text>
+                      )}
+                      <View style={[styles.barTrack, { height: BAR_HEIGHT }]}>
+                        <LinearGradient
+                          colors={amt > 0 ? (Colors.gradientCyan as unknown as [string, string]) : ['rgba(100,200,255,0.25)', 'rgba(100,200,255,0.08)']}
+                          style={[styles.bar, { height: barH }]}
+                        />
+                      </View>
+                      <Text style={styles.barDayLabel}>{d.day}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
+          {!hasWeeklySpend && (
+            <Text style={styles.barEmptyHint}>No spending this week yet</Text>
+          )}
         </GlowCard>
 
         <View style={{ height: 100 }} />
@@ -820,14 +859,45 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 8,
   },
-  chartLabels: {
+  barChartRow: {
     flexDirection: 'row',
+    alignItems: 'flex-end',
     justifyContent: 'space-between',
-    marginTop: 8,
+    gap: 6,
   },
-  chartLabel: {
+  barChartCol: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 6,
+  },
+  barAmtLabel: {
+    fontFamily: Fonts.bodyMedium,
+    fontSize: 10,
+    color: Colors.accentCyan,
+  },
+  barTrack: {
+    width: '100%',
+    borderRadius: 6,
+    backgroundColor: 'rgba(100,200,255,0.06)',
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  bar: {
+    width: '100%',
+    borderRadius: 6,
+    minHeight: 4,
+  },
+  barDayLabel: {
     fontFamily: Fonts.bodyRegular,
     fontSize: FontSizes.xs,
     color: Colors.textMuted,
+    marginTop: 2,
+  },
+  barEmptyHint: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.xs,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginTop: 10,
   },
 });

@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import multer from "multer";
-import { supabase, insertReceipt } from "../services/supabaseWriter";
+import { supabase, insertReceipt, DuplicateReceiptError } from "../services/supabaseWriter";
 import { extractReceiptData } from "../services/geminiVision";
 import { validateReceiptData } from "../validators/receiptSchema";
 import { uploadToR2 } from "../services/r2Uploader";
@@ -229,7 +229,7 @@ router.get("/auth/oauth-config", (_req: Request, res: Response) => {
 });
 
 // GET /api/auth/google-url — generate Google OAuth consent URL
-router.get("/api/auth/google-url", (_req: Request, res: Response) => {
+router.get("/auth/google-url", (_req: Request, res: Response) => {
   try {
     const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
@@ -309,6 +309,14 @@ router.post("/upload-receipt", upload.single("receipt"), async (req: Request, re
       receipt: receipt ? mapReceipt(receipt) : { id: receiptId },
     });
   } catch (e: any) {
+    if (e instanceof DuplicateReceiptError) {
+      return res.status(409).json({
+        success: false,
+        error: e.message,
+        duplicate: true,
+        receiptId: e.receiptId,
+      });
+    }
     logError("API /upload-receipt error", e);
     res.status(500).json({ error: e.message });
   }
@@ -379,10 +387,54 @@ router.get("/receipts/:id", async (req: Request, res: Response) => {
   }
 });
 
+// ---------- DELETE /api/receipts/:id ----------
+router.delete("/receipts/:id", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { id } = req.params;
+
+    const { error: itemsError } = await supabase
+      .from("receipt_items")
+      .delete()
+      .eq("receipt_id", id);
+
+    if (itemsError) throw itemsError;
+
+    const { error } = await supabase
+      .from("receipts")
+      .delete()
+      .eq("id", id)
+      .eq("user_phone", phone);
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e: any) {
+    logError("API DELETE /receipts/:id error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- DELETE /api/receipts (delete all receipts for user) ----------
 router.delete("/receipts", async (req: Request, res: Response) => {
   try {
     const phone = (req as any).userPhone;
+    const { data: receipts, error: lookupError } = await supabase
+      .from("receipts")
+      .select("id")
+      .eq("user_phone", phone);
+
+    if (lookupError) throw lookupError;
+
+    const ids = (receipts || []).map((r: any) => r.id);
+    if (ids.length > 0) {
+      const { error: itemsError } = await supabase
+        .from("receipt_items")
+        .delete()
+        .in("receipt_id", ids);
+
+      if (itemsError) throw itemsError;
+    }
+
     const { error } = await supabase
       .from("receipts")
       .delete()

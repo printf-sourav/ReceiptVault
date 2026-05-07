@@ -1,9 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import axios from 'axios';
 import { subscribe } from '../lib/eventBus';
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+import {
+  getReceipts,
+  getSpendingAnalytics,
+  getCategoryAnalytics,
+  getTopMerchants,
+  getDashboardStats,
+} from '../../lib/api';
 
 export interface Receipt {
   id: string;
@@ -70,8 +74,6 @@ export const useData = () => {
       setLoading(true);
       setError(null);
 
-      const headers = { 'X-User-Phone': userPhone };
-
       // Fetch all data in parallel
       const [
         receiptsRes,
@@ -81,12 +83,12 @@ export const useData = () => {
         merchantsRes,
         statsRes,
       ] = await Promise.all([
-        axios.get(`${API_URL}/api/receipts`, { headers }),
-        axios.get(`${API_URL}/api/analytics/spending?period=week`, { headers }),
-        axios.get(`${API_URL}/api/analytics/spending?period=month`, { headers }),
-        axios.get(`${API_URL}/api/analytics/categories`, { headers }),
-        axios.get(`${API_URL}/api/analytics/top-merchants`, { headers }),
-        axios.get(`${API_URL}/api/dashboard/stats`, { headers }),
+        getReceipts(),
+        getSpendingAnalytics('week'),
+        getSpendingAnalytics('month'),
+        getCategoryAnalytics(),
+        getTopMerchants(),
+        getDashboardStats(),
       ]);
 
       // Parse dates in receipts
