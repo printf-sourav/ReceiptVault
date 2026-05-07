@@ -29,11 +29,12 @@ function RouteGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (isLoading) return;
 
-    const inProtectedGroup = segments[0] === '(tabs)';
+    const inProtectedGroup = segments[0] === '(tabs)' || segments[0] === 'receipt' || segments[0] === 'upload';
 
     if (!isAuthenticated && inProtectedGroup) {
       router.replace('/login');
-    } else if (isAuthenticated && !inProtectedGroup) {
+    } else if (isAuthenticated && segments[0] === 'login' && segments.length === 1) {
+      // Only redirect from login if on the root login route
       router.replace('/(tabs)');
     }
   }, [isAuthenticated, isLoading, segments]);

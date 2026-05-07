@@ -17,6 +17,13 @@ export class DuplicateReceiptError extends Error {
   }
 }
 
+export type ReceiptSource = "whatsapp" | "gmail";
+
+export interface InsertReceiptOptions {
+  source?: ReceiptSource;
+  geminiRaw?: unknown;
+}
+
 function normalizePhone(phone: string): string {
   const digits = String(phone || "").replace(/\D/g, "");
   if (digits.length === 10) return `+91${digits}`;
@@ -61,7 +68,8 @@ export async function getOrCreateUser(userPhone: string): Promise<string> {
 export async function insertReceipt(
   data: ValidatedReceipt,
   r2Url: string,
-  userPhone: string
+  userPhone: string,
+  options: InsertReceiptOptions = {}
 ): Promise<string> {
   const canonicalPhone = normalizePhone(userPhone);
   const userId = await getOrCreateUser(canonicalPhone);
@@ -149,6 +157,8 @@ export async function insertReceipt(
       warranty_expiry_date: warrantyExpiryDate,
       receipt_number: data.receipt_number,
       date_inferred: data.date_inferred,
+      source: options.source || "whatsapp",
+      gemini_raw: options.geminiRaw ?? null,
       created_at: new Date().toISOString(),
     })
     .select("id")
@@ -179,6 +189,28 @@ export async function insertReceipt(
       logError("Failed to insert receipt items, cleaning up orphaned receipt", itemsError);
       await supabase.from("receipts").delete().eq("id", newReceiptId);
       throw new Error(`Supabase receipt_items insert failed: ${itemsError.message}`);
+    }
+
+    // Persist per-item price snapshots for future price-drop monitoring.
+    const normalizedRows = data.items
+      .map((item) => ({
+        user_id: userId,
+        user_phone: canonicalPhone,
+        item_name: String(item.name || "").trim().toLowerCase(),
+        store_name: data.store_name,
+        unit_price: item.unit_price,
+        currency: data.currency || "INR",
+        receipt_id: newReceiptId,
+        purchased_at: normalizedPurchaseDate,
+      }))
+      .filter((row) => row.item_name.length > 0 && Number(row.unit_price) > 0);
+
+    if (normalizedRows.length > 0) {
+      const { error: historyError } = await supabase.from("price_history").insert(normalizedRows);
+      if (historyError) {
+        // Non-fatal: receipt should still be accepted even if history write fails.
+        logError("Failed to insert price history rows", historyError);
+      }
     }
   }
 

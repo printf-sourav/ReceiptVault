@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEY_BASE_URL = 'rv_api_url';
 const STORAGE_KEY_PHONE = 'rv_user_phone';
+const STORAGE_KEY_PREFIXES = ['sb-', 'receiptvault_'];
 
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '');
@@ -66,6 +67,9 @@ export const getRegistrationStatus = (payload: { email?: string; phone?: string 
 
 export const registerOAuthUser = (payload: { phone: string; email: string; displayName?: string; emailVerified: boolean; otp?: string }) =>
   api.post('/auth/register-oauth', payload);
+
+export const saveGoogleConsent = (payload: { userId: string; email: string; refreshToken: string }) =>
+  api.post('/auth/google-consent', payload);
 
 // Receipt endpoints
 export const uploadReceipt = async (fileOrUri: File | string) => {
@@ -131,4 +135,10 @@ export const getUserPhone = () =>
 
 export const clearUserData = async () => {
   await AsyncStorage.multiRemove([STORAGE_KEY_PHONE, STORAGE_KEY_BASE_URL]);
+};
+
+export const clearAllLocalAuthData = async () => {
+  const keys = await AsyncStorage.getAllKeys();
+  const supabaseKeys = keys.filter((key) => STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix)));
+  await AsyncStorage.multiRemove([...supabaseKeys, STORAGE_KEY_PHONE, STORAGE_KEY_BASE_URL]);
 };

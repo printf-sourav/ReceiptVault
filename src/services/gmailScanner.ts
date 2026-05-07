@@ -4,7 +4,7 @@ import * as path from "path";
 import * as readline from "readline";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { validateReceiptData } from "../validators/receiptSchema";
-import { insertReceipt } from "./supabaseWriter";
+import { insertReceipt, supabase } from "./supabaseWriter";
 import { appendReceiptToIndex } from "../utils/memory";
 import { log, logError } from "../utils/logger";
 
@@ -22,6 +22,7 @@ const KNOWN_SENDERS = [
   "no-reply@zomato.com",
   "orders@swiggy.in",
   "noreply@bigbasket.com",
+  "meritnook@gmail.com", // Test sender
 ];
 
 const RECEIPT_SUBJECT_KEYWORDS = [
@@ -79,7 +80,7 @@ async function authorize(): Promise<InstanceType<typeof google.auth.OAuth2>> {
     oAuth2Client.setCredentials(JSON.parse(token));
     return oAuth2Client;
   } catch {
-    const authUrl = oAuth2Client.generateAuthUrl({ access_type: "offline", scope: SCOPES });
+    const authUrl = oAuth2Client.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES });
     console.log("Authorize this app by visiting this URL:", authUrl);
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -96,6 +97,15 @@ async function authorize(): Promise<InstanceType<typeof google.auth.OAuth2>> {
     log("Gmail token saved to token.json");
     return oAuth2Client;
   }
+}
+
+async function authorizeWithRefreshToken(refreshToken: string): Promise<InstanceType<typeof google.auth.OAuth2>> {
+  const credContent = await fs.readFile(CREDENTIALS_PATH, "utf-8");
+  const credentials = JSON.parse(credContent);
+  const { client_secret, client_id, redirect_uris } = credentials.installed || credentials.web;
+  const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+  oAuth2Client.setCredentials({ refresh_token: refreshToken });
+  return oAuth2Client;
 }
 
 function decodeBase64Url(data: string): string {
@@ -210,5 +220,132 @@ export async function scanGmail(): Promise<void> {
     await saveProcessedIds(processedIds);
   } catch (error) {
     logError("Gmail scan failed", error);
+  }
+}
+
+export async function scanUserGmail(userPhone: string, refreshToken: string): Promise<void> {
+  try {
+    const auth = await authorizeWithRefreshToken(refreshToken);
+    const gmail = google.gmail({ version: "v1", auth });
+
+    // Gmail search can be finicky with complex grouped queries.
+    // Use multiple simple queries and merge unique message IDs.
+    const queries = [
+      ...RECEIPT_SUBJECT_KEYWORDS.map((keyword) => `subject:${JSON.stringify(keyword)} newer_than:3d`),
+      ...KNOWN_SENDERS.map((sender) => `from:${sender} newer_than:3d`),
+    ];
+
+    const messageMap = new Map<string, any>();
+    for (const query of queries) {
+      const listResponse = await gmail.users.messages.list({
+        userId: "me",
+        q: query,
+        maxResults: 10,
+      });
+      const queryMessages = listResponse.data.messages || [];
+      log(`📧 Gmail scan query: ${query} -> ${queryMessages.length} matches`);
+      for (const msg of queryMessages) {
+        if (msg.id) messageMap.set(msg.id, msg);
+      }
+    }
+
+    const messages = Array.from(messageMap.values()).slice(0, 20);
+    log(`📊 Gmail scan: found ${messages.length} emails for ${userPhone}`);
+    
+    if (messages.length === 0) {
+      log(`Gmail scan: no new receipt emails found for ${userPhone}`);
+      return;
+    }
+
+    const processedIds = await getProcessedIds();
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
+    for (const msg of messages) {
+      if (!msg.id || processedIds.has(msg.id)) continue;
+
+      const fullMsg = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full",
+      });
+
+      const emailBody = extractTextFromPayload(fullMsg.data.payload);
+      if (!emailBody) continue;
+
+      try {
+        const result = await model.generateContent([
+          { text: EXTRACTION_PROMPT + "\n\nEmail content:\n" + emailBody },
+        ]);
+
+        const responseText = result.response.text();
+        let parsed: unknown;
+
+        try {
+          parsed = JSON.parse(responseText);
+        } catch {
+          const match = responseText.match(/\{[\s\S]*\}/);
+          parsed = match ? JSON.parse(match[0]) : { store_name: "Unknown", parse_error: true, total_amount: 0 };
+        }
+
+        const validatedData = validateReceiptData(parsed);
+        await insertReceipt(validatedData, "", userPhone, { source: "gmail", geminiRaw: parsed });
+
+        await appendReceiptToIndex({
+          date: validatedData.purchase_date || new Date().toISOString().split("T")[0],
+          store: validatedData.store_name,
+          amount: validatedData.total_amount,
+          currency: validatedData.currency,
+          id: msg.id,
+        });
+
+        processedIds.add(msg.id);
+        log(`✅ Gmail receipt processed: ${validatedData.store_name} ${validatedData.total_amount} from email ${msg.id}`);
+      } catch (extractError) {
+        logError(`Failed to process Gmail message ${msg.id}`, extractError);
+      }
+    }
+
+    await saveProcessedIds(processedIds);
+  } catch (error) {
+    logError(`Gmail scan failed for ${userPhone}`, error);
+  }
+}
+
+export async function scanAllLinkedGmailAccounts(): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from("gmail_accounts")
+      .select("user_id, email, google_refresh_token, status")
+      .eq("status", "active")
+      .not("google_refresh_token", "is", null);
+
+    if (error) {
+      if ((error as any).code === "PGRST205") {
+        log("Gmail scan skipped: gmail_accounts table is not initialized yet.");
+        return;
+      }
+      logError("Failed to load linked Gmail accounts", error);
+      return;
+    }
+
+    for (const account of data || []) {
+      const refreshToken = (account as any).google_refresh_token as string | null;
+      const userId = (account as any).user_id as string | null;
+
+      if (!userId || !refreshToken) continue;
+
+      const { data: user, error: userError } = await supabase
+        .from("users")
+        .select("phone")
+        .eq("id", userId)
+        .single();
+
+      if (userError || !user?.phone) continue;
+
+      await scanUserGmail(user.phone, refreshToken);
+    }
+  } catch (error) {
+    logError("Linked Gmail batch scan failed", error);
   }
 }

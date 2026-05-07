@@ -17,6 +17,21 @@ create table if not exists users (
 );
 
 -- ----------------------------------------------------------------
+-- TABLE 1B: gmail_accounts
+-- Stores Gmail consent and refresh token per user.
+-- ----------------------------------------------------------------
+create table if not exists gmail_accounts (
+  id                    uuid primary key default gen_random_uuid(),
+  user_id               uuid not null references users(id) on delete cascade unique,
+  email                 text not null unique,
+  google_refresh_token  text,
+  consented_at          timestamptz not null default now(),
+  status                text not null default 'pending', -- 'pending' | 'active' | 'revoked'
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now()
+);
+
+-- ----------------------------------------------------------------
 -- TABLE 2: receipts
 -- One row per scanned receipt (WhatsApp photo or Gmail email).
 -- ----------------------------------------------------------------
@@ -135,6 +150,8 @@ create index if not exists idx_alerts_queue_user_phone       on alerts_queue(use
 -- price_history: grouped by user + item for price-drop detection
 create index if not exists idx_price_history_user_item       on price_history(user_phone, item_name);
 create index if not exists idx_price_history_purchased_at    on price_history(purchased_at);
+create index if not exists idx_gmail_accounts_user_id         on gmail_accounts(user_id);
+create index if not exists idx_gmail_accounts_status          on gmail_accounts(status);
 
 -- ================================================================
 -- ROW LEVEL SECURITY
@@ -143,6 +160,7 @@ create index if not exists idx_price_history_purchased_at    on price_history(pu
 -- ================================================================
 
 alter table users           enable row level security;
+alter table gmail_accounts  enable row level security;
 alter table receipts        enable row level security;
 alter table receipt_items   enable row level security;
 alter table subscriptions   enable row level security;
@@ -152,6 +170,7 @@ alter table price_history   enable row level security;
 -- Permissive: allow all operations from the service_role key
 -- (your backend uses service_role, so these policies apply to anon/authenticated only)
 create policy "allow_all_users"         on users           for all using (true) with check (true);
+create policy "allow_all_gmail_accounts" on gmail_accounts  for all using (true) with check (true);
 create policy "allow_all_receipts"      on receipts        for all using (true) with check (true);
 create policy "allow_all_items"         on receipt_items   for all using (true) with check (true);
 create policy "allow_all_subscriptions" on subscriptions   for all using (true) with check (true);

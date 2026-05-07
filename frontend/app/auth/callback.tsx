@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, ScrollView, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
-import { getRegistrationStatus, saveUserPhone } from '../../lib/api';
+import { getRegistrationStatus, saveGoogleConsent, saveUserPhone } from '../../lib/api';
 import { Colors } from '../../src/constants/colors';
 import { Fonts, FontSizes } from '../../src/constants/typography';
 
@@ -65,6 +65,7 @@ export default function AuthCallbackScreen() {
             console.log('Session set successfully from OAuth token');
             const { data } = await supabase.auth.getSession();
             if (data.session) {
+                const refreshToken = (data.session as any)?.provider_refresh_token || (data.session as any)?.provider_token || '';
               if (!isEmailVerified(data.session.user)) {
                 await supabase.auth.signOut();
                 const msg = 'Email verification is required before registration.';
@@ -82,6 +83,14 @@ export default function AuthCallbackScreen() {
                     3000
                   );
                   const registration = statusResponse.data;
+
+                  if (registration?.registered && registration?.user?.id && refreshToken) {
+                    await saveGoogleConsent({
+                      userId: registration.user.id,
+                      email,
+                      refreshToken,
+                    });
+                  }
 
                   if (registration?.registered && registration?.phone) {
                     await saveUserPhone(registration.phone);
@@ -136,6 +145,7 @@ export default function AuthCallbackScreen() {
 
         const { data } = await supabase.auth.getSession();
         if (data.session) {
+          const refreshToken = (data.session as any)?.provider_refresh_token || (data.session as any)?.provider_token || '';
           if (!isEmailVerified(data.session.user)) {
             await supabase.auth.signOut();
             const msg = 'Email verification is required before registration.';
@@ -153,6 +163,14 @@ export default function AuthCallbackScreen() {
                 3000
               );
               const registration = statusResponse.data;
+
+              if (registration?.registered && registration?.user?.id && refreshToken) {
+                await saveGoogleConsent({
+                  userId: registration.user.id,
+                  email,
+                  refreshToken,
+                });
+              }
 
               if (registration?.registered && registration?.phone) {
                 await saveUserPhone(registration.phone);

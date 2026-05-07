@@ -16,7 +16,9 @@ import {
   saveUserPhone,
   getUserPhone,
   clearUserData,
+  clearAllLocalAuthData,
   registerOAuthUser,
+  saveGoogleConsent,
   getRegistrationStatus,
 } from '../lib/api';
 import type { Session, User } from '@supabase/supabase-js';
@@ -182,9 +184,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               });
             } else {
               // Stale local phone cache after DB reset; force fresh login.
-              await clearUserData();
+              await clearAllLocalAuthData();
+              await supabase.auth.signOut();
               setUserPhone(null);
               setLinkedProfile(null);
+              setSession(null);
             }
           } catch {
             // If lookup fails (e.g. network), keep existing local phone behavior.
@@ -365,6 +369,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           otp,
         });
 
+        const refreshToken =
+          (session as any)?.provider_refresh_token ||
+          (session as any)?.provider_token ||
+          '';
+
+        if (refreshToken) {
+          await saveGoogleConsent({
+            userId: data?.user?.id,
+            email,
+            refreshToken,
+          });
+        }
+
         await saveUserPhone(data?.user?.phone || phone);
         setUserPhone(data?.user?.phone || phone);
         setLinkedProfile({
@@ -388,9 +405,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     try {
-      await clearUserData();
+      await clearAllLocalAuthData();
       setUserPhone(null);
       setLinkedProfile(null);
+      setSession(null);
       const { error: signOutError } = await supabase.auth.signOut();
       if (signOutError) {
         setError('Failed to sign out. Please try again.');

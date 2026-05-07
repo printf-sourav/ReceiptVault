@@ -25,6 +25,24 @@ CREATE INDEX IF NOT EXISTS idx_receipts_return_deadline  ON receipts (return_dea
 CREATE INDEX IF NOT EXISTS idx_receipts_purchase_date    ON receipts (purchase_date);
 
 -- ─────────────────────────────────────────────
+-- TABLE: gmail_accounts
+-- Stores Gmail consent and refresh token per user.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS gmail_accounts (
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id               UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+  email                 TEXT NOT NULL UNIQUE,
+  google_refresh_token  TEXT,
+  consented_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  status                TEXT NOT NULL DEFAULT 'pending',
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_gmail_accounts_user_id  ON gmail_accounts (user_id);
+CREATE INDEX IF NOT EXISTS idx_gmail_accounts_status   ON gmail_accounts (status);
+
+-- ─────────────────────────────────────────────
 -- TABLE: receipt_items
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS receipt_items (

@@ -228,27 +228,35 @@ export default function ReceiptDetailScreen() {
 
         {/* Itemized Table */}
         <Animated.View entering={FadeInDown.delay(400).duration(400)}>
-          <Text style={styles.itemsTitle}>Items</Text>
-          {(receipt.items || []).map((item: { name: string; quantity: number; price: number }, index: number) => (
-            <View
-              key={index}
-              style={[
-                styles.itemRow,
-                {
-                  backgroundColor:
-                    index % 2 === 0 ? Colors.bgSecondary : Colors.bgTertiary,
-                },
-              ]}
-            >
-              <Text style={styles.itemName} numberOfLines={1}>
-                {item.name}
+          <Text style={styles.itemsTitle}>Products In This Receipt</Text>
+          {(receipt.items || []).length === 0 ? (
+            <View style={styles.itemsEmptyRow}>
+              <Text style={styles.itemsEmptyText}>
+                No product details were extracted for this receipt.
               </Text>
-              <Text style={styles.itemQty}>x{item.quantity}</Text>
-              <MonoText style={styles.itemPrice}>
-                {formatIndianCurrency(item.price)}
-              </MonoText>
             </View>
-          ))}
+          ) : (
+            (receipt.items || []).map((item: { name: string; quantity: number; price: number }, index: number) => (
+              <View
+                key={index}
+                style={[
+                  styles.itemRow,
+                  {
+                    backgroundColor:
+                      index % 2 === 0 ? Colors.bgSecondary : Colors.bgTertiary,
+                  },
+                ]}
+              >
+                <Text style={styles.itemName} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.itemQty}>x{item.quantity}</Text>
+                <MonoText style={styles.itemPrice}>
+                  {formatIndianCurrency(item.price)}
+                </MonoText>
+              </View>
+            ))
+          )}
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total</Text>
             <MonoText style={styles.totalValue}>
@@ -542,6 +550,20 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     marginTop: 8,
     marginBottom: 12,
+  },
+  itemsEmptyRow: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.borderSubtle,
+    backgroundColor: Colors.bgSecondary,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 6,
+  },
+  itemsEmptyText: {
+    fontFamily: Fonts.bodyRegular,
+    fontSize: FontSizes.sm,
+    color: Colors.textSecondary,
   },
   itemRow: {
     flexDirection: 'row',

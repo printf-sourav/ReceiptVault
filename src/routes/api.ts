@@ -7,6 +7,9 @@ import { uploadToR2 } from "../services/r2Uploader";
 import { log, logError } from "../utils/logger";
 import { sendOtp, verifyOtp } from "../services/otpService";
 import { google } from "googleapis";
+import { scanUserGmail } from "../services/gmailScanner";
+import axios from "axios";
+import * as cheerio from "cheerio";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -205,9 +208,45 @@ router.post("/auth/register-oauth", async (req: Request, res: Response) => {
 
     if (error) throw error;
 
+    if (email) {
+      await supabase.from("gmail_accounts").upsert({
+        user_id: newUser.id,
+        email,
+        google_refresh_token: null,
+        consented_at: new Date().toISOString(),
+        status: "pending",
+      }, { onConflict: "user_id" });
+    }
+
     res.json({ success: true, user: newUser, isNew: true });
   } catch (e: any) {
     logError("API /auth/register-oauth error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/auth/google-consent — store Gmail refresh token after consent
+router.post("/auth/google-consent", async (req: Request, res: Response) => {
+  try {
+    const { userId, email, refreshToken } = req.body;
+
+    if (!userId || !email || !refreshToken) {
+      return res.status(400).json({ error: "userId, email and refreshToken are required" });
+    }
+
+    const { error } = await supabase.from("gmail_accounts").upsert({
+      user_id: userId,
+      email,
+      google_refresh_token: refreshToken,
+      consented_at: new Date().toISOString(),
+      status: "active",
+    }, { onConflict: "user_id" });
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (e: any) {
+    logError("API /auth/google-consent error", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -256,6 +295,105 @@ router.get("/auth/google-url", (_req: Request, res: Response) => {
   }
 });
 
+// POST /api/test-link-gmail — TEST ONLY: manually link a Gmail account for testing
+router.post("/test-link-gmail", async (req: Request, res: Response) => {
+  try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "This endpoint is disabled in production" });
+    }
+
+    const { phone, email, refreshToken } = req.body;
+
+    if (!phone || !email || !refreshToken) {
+      return res.status(400).json({ error: "phone, email, and refreshToken are required" });
+    }
+
+    const canonicalPhone = normalizePhone(phone);
+
+    // Get user ID
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("id")
+      .eq("phone", canonicalPhone)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Upsert gmail account with test token
+    const { data, error } = await supabase
+      .from("gmail_accounts")
+      .upsert({
+        user_id: user.id,
+        email,
+        google_refresh_token: refreshToken,
+        status: "active",
+        consented_at: new Date().toISOString(),
+      }, { onConflict: "user_id" });
+
+    if (error) {
+      logError("Test link Gmail error", error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    log(`✅ TEST: Gmail account linked for ${canonicalPhone}`);
+    res.json({ success: true, message: "Gmail account linked for testing" });
+  } catch (e: any) {
+    logError("API /test-link-gmail error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/test-gmail-api — TEST ONLY: test Gmail API connectivity
+router.post("/test-gmail-api", async (req: Request, res: Response) => {
+  try {
+    if (process.env.NODE_ENV === "production") {
+      return res.status(403).json({ error: "Disabled in production" });
+    }
+
+    const { refreshToken, query } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ error: "refreshToken required" });
+    }
+
+    const credentials = require("../../credentials.json");
+    const { client_id, client_secret, redirect_uris } = credentials.installed;
+
+    const oauth2Client = new google.auth.OAuth2(client_id, client_secret, redirect_uris[0]);
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+    // Try to list emails with optional query
+    const finalQuery = query || "newer_than:1d";
+    log(`📧 Testing Gmail query: ${finalQuery}`);
+    
+    const response = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 5,
+      q: finalQuery,
+    });
+
+    const messages = response.data.messages || [];
+    log(`✅ Gmail API test: found ${messages.length} emails with query "${finalQuery}"`);
+
+    res.json({
+      success: true,
+      query: finalQuery,
+      messagesFound: messages.length,
+      messageIds: messages.map((m) => m.id),
+    });
+  } catch (error: any) {
+    logError("Gmail API test error", error);
+    res.json({
+      success: false,
+      error: error.message,
+      code: error.code,
+    });
+  }
+});
+
 // ---------- AUTH MIDDLEWARE ----------
 function requirePhone(req: Request, res: Response, next: Function) {
   const phone = req.headers["x-user-phone"] as string;
@@ -267,6 +405,44 @@ function requirePhone(req: Request, res: Response, next: Function) {
 }
 
 router.use(requirePhone);
+
+// POST /api/trigger-gmail-scan — manually run the Gmail scan for the linked user
+router.post("/trigger-gmail-scan", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("id")
+      .eq("phone", phone)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const { data: account, error } = await supabase
+      .from("gmail_accounts")
+      .select("email, google_refresh_token, status")
+      .eq("status", "active")
+      .eq("user_id", user.id)
+      .single();
+
+    if (error || !account) {
+      return res.status(404).json({ success: false, error: "No linked Gmail account found" });
+    }
+
+    if (!account.google_refresh_token) {
+      return res.status(400).json({ success: false, error: "Gmail consent not completed yet" });
+    }
+
+    await scanUserGmail(phone, account.google_refresh_token);
+    res.json({ success: true });
+  } catch (e: any) {
+    logError("API /trigger-gmail-scan error", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 // ---------- POST /api/upload-receipt ----------
 router.post("/upload-receipt", upload.single("receipt"), async (req: Request, res: Response) => {
@@ -703,6 +879,305 @@ router.get("/dashboard/stats", async (req: Request, res: Response) => {
   }
 });
 
+// ---------- GET /api/analytics/price-monitor ----------
+router.get("/analytics/price-monitor", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { limit = "20" } = req.query;
+    const maxRows = Math.min(Number(limit) || 20, 100);
+
+    const { data, error } = await supabase
+      .from("price_history")
+      .select("item_name, store_name, unit_price, currency, purchased_at")
+      .eq("user_phone", phone)
+      .order("purchased_at", { ascending: false })
+      .limit(2000);
+
+    if (error) throw error;
+
+    const rows = data || [];
+    const byItem = new Map<string, any[]>();
+
+    for (const row of rows as any[]) {
+      const key = String(row.item_name || "").trim().toLowerCase();
+      if (!key) continue;
+      if (!byItem.has(key)) byItem.set(key, []);
+      byItem.get(key)!.push(row);
+    }
+
+    const result = Array.from(byItem.entries())
+      .map(([itemName, itemRows]) => {
+        const sortedRows = itemRows.sort((a: any, b: any) => new Date(b.purchased_at).getTime() - new Date(a.purchased_at).getTime());
+        const latest = sortedRows[0];
+        const previous = sortedRows.slice(1);
+        const bestHistorical = previous.length > 0
+          ? Math.min(...previous.map((r: any) => Number(r.unit_price || 0)).filter((n: number) => n > 0))
+          : Number(latest.unit_price || 0);
+        const latestPrice = Number(latest.unit_price || 0);
+        const delta = latestPrice - bestHistorical;
+        const deltaPercent = bestHistorical > 0 ? (delta / bestHistorical) * 100 : 0;
+
+        return {
+          itemName,
+          latestPrice,
+          currency: latest.currency,
+          latestStore: latest.store_name,
+          latestPurchasedAt: latest.purchased_at,
+          bestHistoricalPrice: bestHistorical,
+          delta,
+          deltaPercent,
+          trend: delta < 0 ? "down" : delta > 0 ? "up" : "flat",
+          observations: sortedRows.length,
+        };
+      })
+      .sort((a, b) => Math.abs(b.deltaPercent) - Math.abs(a.deltaPercent))
+      .slice(0, maxRows);
+
+    res.json(result);
+  } catch (e: any) {
+    logError("API /analytics/price-monitor error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/price-history ----------
+// Query price history by platform name and/or product name
+// Usage: /api/price-history?platform=Walmart&product=milk
+router.get("/price-history", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { platform, product, limit = "100" } = req.query;
+    const maxRows = Math.min(Number(limit) || 100, 500);
+
+    let query = supabase
+      .from("price_history")
+      .select("id, item_name, store_name, unit_price, currency, purchased_at, receipt_id");
+
+    // Apply filters
+    if (phone) {
+      query = query.eq("user_phone", phone);
+    }
+    if (platform) {
+      query = query.ilike("store_name", `%${platform}%`);
+    }
+    if (product) {
+      query = query.ilike("item_name", `%${product}%`);
+    }
+
+    const { data, error } = await query
+      .order("purchased_at", { ascending: false })
+      .limit(maxRows);
+
+    if (error) throw error;
+
+    const result = (data || []).map((row: any) => ({
+      id: row.id,
+      productName: row.item_name,
+      platformName: row.store_name,
+      unitPrice: Number(row.unit_price),
+      currency: row.currency,
+      purchasedAt: row.purchased_at,
+      receiptId: row.receipt_id,
+    }));
+
+    res.json({
+      total: result.length,
+      data: result,
+      filters: {
+        platform: platform || null,
+        product: product || null,
+      },
+    });
+  } catch (e: any) {
+    logError("API /price-history error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- POST /api/price-history/record ----------
+// Manually record a current market price for price comparison
+// Usage: POST /api/price-history/record
+// Body: { platformName, productName, currentPrice, currency }
+router.post("/price-history/record", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { platformName, productName, currentPrice, currency = "INR" } = req.body;
+
+    if (!platformName || !productName || currentPrice === undefined) {
+      return res.status(400).json({ error: "platformName, productName, and currentPrice are required" });
+    }
+
+    const { data, error } = await supabase.from("price_history").insert({
+      user_phone: phone,
+      item_name: String(productName).toLowerCase().trim(),
+      store_name: String(platformName).trim(),
+      unit_price: Number(currentPrice),
+      currency: currency,
+      purchased_at: new Date().toISOString().split("T")[0], // Today's date
+    }).select("*");
+
+    if (error) throw error;
+
+    const record = data?.[0];
+    res.json({
+      success: true,
+      message: `Recorded current price for "${productName}" on ${platformName}`,
+      recorded: {
+        productName: record?.item_name,
+        platformName: record?.store_name,
+        currentPrice: Number(record?.unit_price),
+        currency: record?.currency,
+        recordedAt: record?.created_at,
+      },
+    });
+  } catch (e: any) {
+    logError("API /price-history/record error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET /api/price-comparison/:productId ----------
+// Compare price of a product across time and platforms
+// Shows original purchase price vs current market price
+router.get("/price-comparison/:productId", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { productId } = req.params;
+
+    const { data, error } = await supabase
+      .from("price_history")
+      .select("item_name, store_name, unit_price, currency, purchased_at")
+      .eq("user_phone", phone)
+      .eq("receipt_id", productId)
+      .order("purchased_at", { ascending: true });
+
+    if (error) throw error;
+
+    const rows = data || [];
+    if (rows.length === 0) {
+      return res.json({ error: "No price history found for this product" });
+    }
+
+    const firstPurchase = rows[0];
+    const latestPrice = rows[rows.length - 1];
+    const originalPrice = Number(firstPurchase.unit_price);
+    const currentPrice = Number(latestPrice.unit_price);
+    const priceDelta = currentPrice - originalPrice;
+    const deltaPercent = originalPrice > 0 ? (priceDelta / originalPrice) * 100 : 0;
+
+    res.json({
+      productName: firstPurchase.item_name,
+      platform: firstPurchase.store_name,
+      originalPrice,
+      originalPurchaseDate: firstPurchase.purchased_at,
+      currentPrice,
+      lastRecordedDate: latestPrice.purchased_at,
+      priceDelta,
+      deltaPercent: deltaPercent.toFixed(2),
+      trend: priceDelta < 0 ? "down" : priceDelta > 0 ? "up" : "flat",
+      savings: Math.abs(priceDelta),
+      currency: latestPrice.currency,
+      priceHistory: rows.map((r: any) => ({
+        date: r.purchased_at,
+        price: Number(r.unit_price),
+        store: r.store_name,
+      })),
+    });
+  } catch (e: any) {
+    logError("API /price-comparison error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- POST /api/fetch-current-price ----------
+// Fetch current price from Myntra website using RapidAPI
+// Usage: POST /api/fetch-current-price
+// Body: { productName, myntraUrl } OR { productName } to search
+router.post("/fetch-current-price", async (req: Request, res: Response) => {
+  try {
+    const phone = (req as any).userPhone;
+    const { productName, myntraUrl } = req.body;
+
+    if (!productName) {
+      return res.status(400).json({ error: "productName is required" });
+    }
+
+    let price: number | null = null;
+    let foundUrl = myntraUrl;
+    let productTitle = productName;
+
+    // If URL provided, scrape directly using RapidAPI
+    if (myntraUrl) {
+      const result = await fetchPriceFromRapidAPI(myntraUrl);
+      if (result) {
+        price = result.price;
+        productTitle = result.title || productName;
+        foundUrl = result.url || myntraUrl;
+      }
+    } else {
+      // Search for product on Myntra using RapidAPI
+      const searchResults = await searchMyntraViaRapidAPI(productName);
+      if (searchResults.length > 0) {
+        const topResult = searchResults[0];
+        foundUrl = topResult.url;
+        price = topResult.price;
+        productTitle = topResult.title || productName;
+      }
+    }
+
+    if (price === null) {
+      return res.status(404).json({ 
+        error: "Could not fetch price from Myntra",
+        hint: "Make sure RAPID_API_KEY is set in .env. Get a free key from https://rapidapi.com"
+      });
+    }
+
+    // Record the current price in database
+    const { data: recorded, error: recordError } = await supabase.from("price_history").insert({
+      user_phone: phone,
+      item_name: String(productTitle).toLowerCase().trim(),
+      store_name: "Myntra",
+      unit_price: price,
+      currency: "INR",
+      purchased_at: new Date().toISOString().split("T")[0],
+    }).select("*");
+
+    if (recordError) throw recordError;
+
+    // Get price history for comparison
+    const { data: history } = await supabase
+      .from("price_history")
+      .select("unit_price, purchased_at")
+      .eq("user_phone", phone)
+      .ilike("item_name", `%${productTitle}%`)
+      .eq("store_name", "Myntra")
+      .order("purchased_at", { ascending: true });
+
+    const historyRows = history || [];
+    const originalPrice = historyRows.length > 1 ? Number(historyRows[0].unit_price) : price;
+    const priceDelta = price - originalPrice;
+    const deltaPercent = originalPrice > 0 ? (priceDelta / originalPrice) * 100 : 0;
+
+    res.json({
+      success: true,
+      message: `✅ Price fetched from Myntra via RapidAPI`,
+      currentPrice: price,
+      originalPrice,
+      priceDelta,
+      deltaPercent: deltaPercent.toFixed(2),
+      trend: priceDelta < 0 ? "down 📉" : priceDelta > 0 ? "up 📈" : "flat →",
+      savings: Math.abs(priceDelta),
+      productName: productTitle,
+      myntraUrl: foundUrl,
+      recordedAt: recorded?.[0]?.created_at,
+      currency: "INR",
+    });
+  } catch (e: any) {
+    logError("API /fetch-current-price error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------- HELPERS ----------
 function normalizePhone(phone: string): string {
   const digits = String(phone || "").replace(/\D/g, "");
@@ -737,27 +1212,236 @@ function guessCategory(storeName: string, items: any[]): string {
   return "Other";
 }
 
+function getReceiptItems(receipt: any): Array<{ name: string; quantity: number; price: number }> {
+  const dbItems = (receipt.receipt_items || [])
+    .map((item: any) => ({
+      name: String(item.name || "").trim(),
+      quantity: Number(item.quantity || 1),
+      price: Number(item.unit_price || item.total_price || 0),
+    }))
+    .filter((item: any) => item.name.length > 0);
+
+  if (dbItems.length > 0) return dbItems;
+
+  const rawItems = Array.isArray(receipt.gemini_raw?.items) ? receipt.gemini_raw.items : [];
+  return rawItems
+    .map((item: any) => ({
+      name: String(item?.name || "").trim(),
+      quantity: Number(item?.quantity || 1),
+      price: Number(item?.unit_price || item?.total_price || 0),
+    }))
+    .filter((item: any) => item.name.length > 0);
+}
+
 function mapReceipt(receipt: any) {
+  const items = getReceiptItems(receipt);
+
   return {
     id: receipt.id,
     store: receipt.store_name,
     storeLogo: receipt.store_name?.substring(0, 2).toUpperCase() || "RCP",
-    item: receipt.receipt_items?.[0]?.name || "Receipt",
+    item: items[0]?.name || "Receipt",
     amount: receipt.total_amount,
     date: receipt.purchase_date,
     createdAt: receipt.created_at,
-    category: guessCategory(receipt.store_name, receipt.receipt_items || []),
+    category: guessCategory(receipt.store_name, items || []),
     paymentMode: "Unknown",
     returnDeadline: receipt.return_deadline_date,
     warrantyExpiry: receipt.warranty_expiry_date,
     imageUrl: receipt.r2_image_url,
-    items: (receipt.receipt_items || []).map((item: any) => ({
-      name: item.name,
-      quantity: item.quantity,
-      price: item.unit_price || item.total_price,
-    })),
+    items,
+    productNames: items.map((item) => item.name),
     aiExtracted: true,
   };
+}
+
+// ---------- WEB SCRAPING HELPERS (Using RapidAPI) ----------
+async function fetchPriceFromRapidAPI(
+  myntraUrl: string
+): Promise<{ price: number; title: string; url: string } | null> {
+  try {
+    const apiKey = process.env.RAPID_API_KEY;
+    const apiHost = process.env.RAPID_API_HOST;
+
+    if (!apiKey || apiKey === "YOUR_RAPID_API_KEY_HERE") {
+      logError("RapidAPI key not configured");
+      return null;
+    }
+
+    // Extract product ID from Myntra URL
+    const productIdMatch = myntraUrl.match(/\/p\/([a-z0-9]+)/i);
+    if (!productIdMatch) {
+      logError("Could not extract product ID from URL");
+      return null;
+    }
+
+    const productId = productIdMatch[1];
+
+    // Use RapidAPI for fetching price
+    const options = {
+      method: "GET",
+      url: "https://real-time-amazon-data.p.rapidapi.com/search",
+      params: {
+        query: productId,
+        page: "1",
+        country: "IN",
+      },
+      headers: {
+        "x-rapidapi-key": apiKey,
+        "x-rapidapi-host": apiHost,
+      },
+    };
+
+    const response = await axios.request(options);
+    const products = response.data?.data?.products || [];
+
+    if (products.length > 0) {
+      const product = products[0];
+      const price = Number(product.price || 0);
+      const title = product.title || "";
+
+      if (price > 0) {
+        log(`✅ Fetched price from RapidAPI: ₹${price}`);
+        return { price, title, url: myntraUrl };
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logError("Error fetching from RapidAPI:", error.message);
+    return null;
+  }
+}
+
+async function searchMyntraViaRapidAPI(
+  productName: string
+): Promise<Array<{ url: string; price: number; title: string }>> {
+  try {
+    const apiKey = process.env.RAPID_API_KEY;
+    const apiHost = process.env.RAPID_API_HOST;
+
+    if (!apiKey || apiKey === "YOUR_RAPID_API_KEY_HERE") {
+      logError("RapidAPI key not configured");
+      return [];
+    }
+
+    const options = {
+      method: "GET",
+      url: "https://real-time-amazon-data.p.rapidapi.com/search",
+      params: {
+        query: `${productName} site:myntra.com`,
+        page: "1",
+        country: "IN",
+      },
+      headers: {
+        "x-rapidapi-key": apiKey,
+        "x-rapidapi-host": apiHost,
+      },
+    };
+
+    const response = await axios.request(options);
+    const products = response.data?.data?.products || [];
+
+    const results: Array<{ url: string; price: number; title: string }> = [];
+
+    for (const product of products.slice(0, 5)) {
+      const price = Number(product.price || 0);
+      const title = product.title || productName;
+      const asin = product.asin || "";
+
+      if (price > 0) {
+        const url = `https://www.myntra.com/p/${asin}`;
+        results.push({ url, price, title });
+      }
+    }
+
+    log(`🔍 Found ${results.length} products via RapidAPI`);
+    return results;
+  } catch (error: any) {
+    logError("Error searching Myntra via RapidAPI:", error.message);
+    return [];
+  }
+}
+
+// Fallback local scraping (in case RapidAPI fails)
+async function scrapeMytraPrice(url: string): Promise<number | null> {
+  try {
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    };
+
+    const { data } = await axios.get(url, { headers, timeout: 5000 });
+    const $ = cheerio.load(data);
+
+    // Try multiple selectors for price (Myntra might change their HTML)
+    const priceSelectors = [
+      '[class*="productDiscountedPriceText"]',
+      '[class*="discountedPrice"]',
+      '[class*="productPrice"]',
+      "span[class*='price']",
+    ];
+
+    for (const selector of priceSelectors) {
+      const priceText = $(selector).first().text();
+      const priceMatch = priceText.match(/₹[\s]?([0-9,]+)/);
+      if (priceMatch) {
+        const price = parseInt(priceMatch[1].replace(/,/g, ""), 10);
+        if (!isNaN(price) && price > 0) {
+          log(`✅ Scraped Myntra price (local): ₹${price}`);
+          return price;
+        }
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    logError("Error scraping Myntra price:", error.message);
+    return null;
+  }
+}
+
+async function searchMyntraProduct(
+  productName: string
+): Promise<Array<{ url: string; price: number }>> {
+  try {
+    const searchUrl = `https://www.myntra.com/search?q=${encodeURIComponent(productName)}`;
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    };
+
+    const { data } = await axios.get(searchUrl, { headers, timeout: 5000 });
+    const $ = cheerio.load(data);
+
+    const results: Array<{ url: string; price: number }> = [];
+
+    // Find product links and prices
+    $("a[href*='/p/']").slice(0, 3).each((_, element) => {
+      const href = $(element).attr("href");
+      if (!href) return;
+
+      const productUrl = `https://www.myntra.com${href}`;
+      
+      // Try to get price from nearby element
+      const priceText = $(element)
+        .closest("[class*='productContainer']")
+        ?.find('[class*="price"]')
+        ?.first()
+        ?.text() || "";
+      
+      const priceMatch = priceText.match(/₹[\s]?([0-9,]+)/);
+      if (priceMatch) {
+        const price = parseInt(priceMatch[1].replace(/,/g, ""), 10);
+        if (!isNaN(price) && price > 0) {
+          results.push({ url: productUrl, price });
+        }
+      }
+    });
+
+    return results;
+  } catch (error: any) {
+    logError("Error searching Myntra:", error.message);
+    return [];
+  }
 }
 
 export default router;
